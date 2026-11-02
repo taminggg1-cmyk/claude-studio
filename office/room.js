@@ -18,7 +18,7 @@ import {
   glowTexture,
   group,
   herringbone,
-  mat,
+  mat as baseMat,
   put,
   rbox,
   roundRugTexture,
@@ -30,6 +30,7 @@ import {
   textTexture,
 } from './kit.js'
 import { extinguisherProp } from './motion.js'
+import { COLOR_KEYS, DEFAULT_DESIGN, checkDesign } from './design.js'
 
 export const ROOM = { x0: -9, x1: 9, z0: -7, z1: 7, h: 4, wall: 0.3 }
 export const SUN_FROM = new THREE.Vector3(5, 13, -15) // where the morning sun sits, relative to the room's centre
@@ -41,6 +42,109 @@ const WINDOWS = [
 const WIN_Y = [0.75, 3.35]
 const DOOR_Z = [-0.55, 0.95]
 const DOOR_H = 2.45
+
+// ------------------------------------------------------------------------------------------------------ design roles
+//
+// A design (design.js) recolours the room by role. Every palette colour listed here belongs to one colour of the
+// design, and keeps its distance from that colour's loft value (a darker wood stays a darker wood), so the loft's own
+// colours come out exactly as before. The room's `mat` below gives such colours a material of their own to recolour;
+// other colours go through the shared cache as usual. The merge into few meshes keeps working: it merges by material,
+// and a recoloured material is still one material.
+
+const ROLE_BASE = Object.fromEntries(Object.entries(DEFAULT_DESIGN.colors).map(([k, v]) => [k, parseInt(v.slice(1), 16)]))
+const ROLE_OF = new Map()
+for (const [key, hexes] of Object.entries({
+  walls: [P.wallBack, P.wallLeft, P.wallCap, P.trim, P.base],
+  wood: [P.oak, P.oakLight, P.oakDark],
+  accent: [P.terracotta, P.terracottaDeep, P.apricot, P.peach],
+  accent2: [P.sage, P.sageDeep, 0xc5d0bd, 0xa9bba3, 0xb3c3ad],
+  sofa: [P.boucle, P.oat],
+  plants: [P.leaf, P.leafDeep, P.leafLight, 0x7f9d63, 0x6f8f58, 0x5d8a4f],
+})) {
+  for (const hex of hexes) ROLE_OF.set(hex, key)
+}
+/** The role materials made so far: { m, key, hex } each, recoloured by the design. */
+let roleMats = new Map()
+
+/** `base` moved by the loft's own distance between `hex` and the role's loft colour, kept inside the colour range. */
+function offsetColour(base, key, hex) {
+  const lo = ROLE_BASE[key]
+  let out = 0
+  for (const shift of [16, 8, 0]) {
+    const v = Math.max(0, Math.min(255, ((base >> shift) & 255) + (((hex >> shift) & 255) - ((lo >> shift) & 255))))
+    out = (out << 8) | v
+  }
+  return out
+}
+
+/** A material of the given role (the design colour `key`), whose loft colour is `hex`. */
+function roleMat(key, hex, opts = {}) {
+  const id = `${key}|${hex}|` + Object.entries(opts).map(([k, v]) => `${k}=${v && v.uuid ? v.uuid : v}`).join(',')
+  let r = roleMats.get(id)
+  if (!r) {
+    r = { key, hex, m: new THREE.MeshStandardMaterial({ color: hex, roughness: 0.82, metalness: 0, ...opts }) }
+    roleMats.set(id, r)
+  }
+  return r.m
+}
+
+/** The room's material: a palette colour with a design role gets a role material, anything else the shared one. */
+function mat(color, opts = {}) {
+  const key = ROLE_OF.get(color)
+  return key ? roleMat(key, color, opts) : baseMat(color, opts)
+}
+
+/** A small tiling canvas texture for the floors that kit.js has no picture for. */
+function floorCanvas(size, draw) {
+  const c = document.createElement('canvas')
+  c.width = c.height = size
+  draw(c.getContext('2d'), size)
+  const t = new THREE.CanvasTexture(c)
+  t.colorSpace = THREE.SRGBColorSpace
+  t.anisotropy = 8
+  return t
+}
+
+/** The floors a design may lay: how to draw them, how often they repeat per metre, and their surface. */
+const FLOOR_KINDS = {
+  concrete: { make: () => concrete(), rep: 4.5, rough: 0.38, metal: 0.02, mult: 0xffffff },
+  oak: { make: () => herringbone(), rep: 3.2, turn: Math.PI / 4, rough: 0.6, metal: 0, mult: 0xf4ece2 },
+  carpet: {
+    make: () =>
+      floorCanvas(256, (g, W) => {
+        const rnd = seeded(21)
+        g.fillStyle = '#e3e0db'
+        g.fillRect(0, 0, W, W)
+        for (let i = 0; i < 9000; i++) {
+          const v = 190 + Math.floor(rnd() * 60)
+          g.fillStyle = `rgba(${v},${v - 2},${v - 6},0.55)`
+          g.fillRect(rnd() * W, rnd() * W, 2, 2)
+        }
+      }),
+    rep: 2.4,
+    rough: 1,
+    metal: 0,
+    mult: 0xffffff,
+  },
+  tiles: {
+    make: () =>
+      floorCanvas(256, (g, W) => {
+        const rnd = seeded(33)
+        g.fillStyle = '#b7b3ab'
+        g.fillRect(0, 0, W, W)
+        for (let x = 0; x < 2; x++)
+          for (let y = 0; y < 2; y++) {
+            const v = 236 + Math.floor(rnd() * 14)
+            g.fillStyle = `rgb(${v},${v - 1},${v - 4})`
+            g.fillRect(x * 128 + 3, y * 128 + 3, 122, 122)
+          }
+      }),
+    rep: 1.6,
+    rough: 0.28,
+    metal: 0.04,
+    mult: 0xffffff,
+  },
+}
 
 let glowTex = null
 const glow = () => (glowTex ??= glowTexture())
@@ -115,7 +219,7 @@ function pot(parent, x, z, r, h, color = P.pot, y = 0) {
     new THREE.Vector2(0, h * 0.9),
   ]
   const g = new THREE.LatheGeometry(pts, 32)
-  put(parent, g, mat(color, { roughness: 0.6 }), x, y, z)
+  put(parent, g, color === P.terracotta || color === P.pot ? roleMat('pots', color, { roughness: 0.6 }) : mat(color, { roughness: 0.6 }), x, y, z)
   put(parent, cyl(r * 0.84, r * 0.84, 0.02, 24), mat(0x6b5444), x, y + h * 0.86, z, { cast: false })
   return y + h * 0.88
 }
@@ -347,31 +451,65 @@ function pendant(parent, x, z, y, r, color, lights, withLight = true) {
 export function buildRoom(scene) {
   const room = group(scene)
   lampGlows = []
+  roleMats = new Map()
   const lights = []
   const animated = []
+  // Furniture that a design can swap or hide lives in slots: a group per slot (kept out of the room-wide merge) with a
+  // group per style, each merged on its own. See `world.design` at the end.
+  const slots = {}
+  const slotOf = (slot, style) => {
+    const s = (slots[slot] ??= { group: group(room), styles: {} })
+    s.group.userData.dynamic = true
+    return (s.styles[style] ??= group(s.group))
+  }
+  // rugs take the design's rug colour as a tint over their picture (or over `mult`, for a plain rug)
+  const rugMats = []
+  const rugMat = (map, mult = 0xffffff) => {
+    const m = new THREE.MeshStandardMaterial({ color: mult, map, roughness: 1 })
+    rugMats.push({ m, mult })
+    return m
+  }
   const { x0, x1, z0, z1, h, wall } = ROOM
 
   // the diorama base, its two visible sides a shade darker
   put(room, rbox(x1 - x0 + 0.9, 0.5, z1 - z0 + 0.9, 0.14), mat(P.base), (x0 + x1) / 2 - 0.15, -0.25, (z0 + z1) / 2 - 0.15)
   put(room, rbox(x1 - x0 + 0.6, 0.08, z1 - z0 + 0.6, 0.04), mat(P.trim), (x0 + x1) / 2 - 0.15, -0.04, (z0 + z1) / 2 - 0.15)
 
-  // floors: polished concrete for the café and lounge side, oak herringbone where people work
+  // floors: polished concrete for the café and lounge side, oak herringbone where people work. A design may lay one
+  // kind (oak, concrete, carpet, tiles) over both, and tint it; the planes keep their own materials so it can change.
   const split = -0.4
-  const conc = concrete()
-  conc.wrapS = conc.wrapT = THREE.RepeatWrapping
-  conc.repeat.set((split - x0) / 4.5, (z1 - z0) / 4.5)
-  put(room, new THREE.PlaneGeometry(split - x0, z1 - z0), mat(0xffffff, { map: conc, roughness: 0.38, metalness: 0.02 }), (x0 + split) / 2, 0.002, (z0 + z1) / 2, {
-    rx: -Math.PI / 2,
-    cast: false,
+  const floorSpan = [
+    { w: split - x0, cx: (x0 + split) / 2 },
+    { w: x1 - split, cx: (split + x1) / 2 },
+  ]
+  const floorMats = floorSpan.map(() => new THREE.MeshStandardMaterial({ color: 0xffffff }))
+  floorSpan.forEach((f, i) => {
+    const m = put(room, new THREE.PlaneGeometry(f.w, z1 - z0), floorMats[i], f.cx, 0.002, (z0 + z1) / 2, { rx: -Math.PI / 2, cast: false })
+    m.userData.floor = i
   })
-  const oak = herringbone()
-  oak.wrapS = oak.wrapT = THREE.RepeatWrapping
-  oak.repeat.set((x1 - split) / 3.2, (z1 - z0) / 3.2)
-  oak.rotation = Math.PI / 4
-  put(room, new THREE.PlaneGeometry(x1 - split, z1 - z0), mat(0xf4ece2, { map: oak, roughness: 0.6 }), (split + x1) / 2, 0.002, (z0 + z1) / 2, {
-    rx: -Math.PI / 2,
-    cast: false,
-  })
+  const floorTextures = new Map()
+  /** Lays `kind` ('mixed' or one floor) with `tint` ('#rrggbb') on both planes. */
+  const setFloor = (kind, tint) => {
+    floorMats.forEach((m, i) => {
+      const k = kind === 'mixed' ? (i === 0 ? 'concrete' : 'oak') : kind
+      const spec = FLOOR_KINDS[k]
+      const key = `${k}|${i}`
+      let tex = floorTextures.get(key)
+      if (!tex) {
+        tex = spec.make()
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+        tex.repeat.set(floorSpan[i].w / spec.rep, (z1 - z0) / spec.rep)
+        if (spec.turn) tex.rotation = spec.turn
+        floorTextures.set(key, tex)
+      }
+      m.map = tex
+      m.roughness = spec.rough
+      m.metalness = spec.metal
+      m.color.set(tint).multiply(new THREE.Color(spec.mult))
+      m.needsUpdate = true
+    })
+  }
+  setFloor('mixed', '#ffffff')
   put(room, rbox(0.08, 0.012, z1 - z0, 0.004), brass(), split, 0.006, (z0 + z1) / 2, { cast: false })
 
   // ---------------------------------------------------------------- walls (back wall with windows, left wall with door)
@@ -626,7 +764,7 @@ export function buildRoom(scene) {
   })
 
   // bistro table with three stools on a round woven rug
-  put(room, new THREE.CylinderGeometry(1.45, 1.45, 0.02, 64), mat(0xffffff, { map: roundRugTexture(P.oat, P.sage), roughness: 1 }), -4.7, 0.012, -3.4, { cast: false })
+  put(room, new THREE.CylinderGeometry(1.45, 1.45, 0.02, 64), rugMat(roundRugTexture(P.oat, P.sage)), -4.7, 0.012, -3.4, { cast: false })
   put(room, discSlab(0.45, 0.04, 0.02), mat(P.travertine, { roughness: 0.5 }), -4.7, 0.6, -3.4)
   put(room, cyl(0.035, 0.035, 0.6, 12), brass(), -4.7, 0.3, -3.4)
   put(room, cyl(0.24, 0.26, 0.03, 28), brass(), -4.7, 0.025, -3.4)
@@ -652,7 +790,8 @@ export function buildRoom(scene) {
       put(wb, rbox(0.06, 0.04, 0.5, 0.02), mat(P.oakLight), s * 0.78, 0.07, 0)
       for (const dz of [-0.22, 0.22]) put(wb, sph(0.035, 10, 8), mat(P.graphite), s * 0.78, 0.035, dz)
     }
-    put(wb, rbox(1.5, 1.0, 0.03, 0.02), mat(0xfbf8f3, { roughness: 0.35 }), 0, 1.25, 0)
+    const boardFace = put(wb, rbox(1.5, 1.0, 0.03, 0.02), mat(0xfbf8f3, { roughness: 0.35 }), 0, 1.25, 0)
+    room.userData.whiteboard = { group: wb, face: boardFace, width: 1.5, height: 1.0 }
     put(wb, rbox(1.56, 0.04, 0.08, 0.015), mat(P.oakLight), 0, 0.73, 0.02)
     const notes = [0xf6d68a, P.peach, 0xbfd6b5, 0xc9d8e0, P.apricot, 0xe7c8dd]
     const nr = seeded(61)
@@ -669,12 +808,13 @@ export function buildRoom(scene) {
   }
   // a cluster of snake plants by the work area
   {
-    const top = pot(room, -1.3, -2.2, 0.26, 0.4, P.boucle)
+    const more = slotOf('plants', 'more')
+    const top = pot(more, -1.3, -2.2, 0.26, 0.4, P.boucle)
     const sr = seeded(62)
     for (let i = 0; i < 14; i++) {
       const a = sr() * Math.PI * 2
       const r = sr() * 0.14
-      put(room, new THREE.ConeGeometry(0.045, 0.6 + sr() * 0.5, 4), mat(i % 3 ? P.leafDeep : 0x7f9d63, { roughness: 0.6 }), -1.3 + Math.cos(a) * r, top + 0.3, -2.2 + Math.sin(a) * r, {
+      put(more, new THREE.ConeGeometry(0.045, 0.6 + sr() * 0.5, 4), mat(i % 3 ? P.leafDeep : 0x7f9d63, { roughness: 0.6 }), -1.3 + Math.cos(a) * r, top + 0.3, -2.2 + Math.sin(a) * r, {
         rx: (sr() - 0.5) * 0.3,
         rz: (sr() - 0.5) * 0.3,
         s: [1, 1, 0.35],
@@ -716,20 +856,26 @@ export function buildRoom(scene) {
 
   // ---------------------------------------------------------------- lounge
   const rug = rugTexture()
-  put(room, rbox(6.0, 0.025, 4.3, 0.012), mat(0xffffff, { map: rug, roughness: 1 }), -4.9, 0.0125, 4.55, { cast: false })
-  put(room, new THREE.CylinderGeometry(1.1, 1.1, 0.02, 64), mat(0xffffff, { map: roundRugTexture(P.apricot, P.sage), roughness: 1 }), -2.75, 0.03, 5.55, { cast: false })
-  curvedSofa(room, -4.9, 4.75)
+  const rugWoven = slotOf('rug', 'woven')
+  put(rugWoven, rbox(6.0, 0.025, 4.3, 0.012), rugMat(rug), -4.9, 0.0125, 4.55, { cast: false })
+  put(rugWoven, new THREE.CylinderGeometry(1.1, 1.1, 0.02, 64), rugMat(roundRugTexture(P.apricot, P.sage)), -2.75, 0.03, 5.55, { cast: false })
+  const rugPlain = slotOf('rug', 'plain')
+  put(rugPlain, rbox(6.0, 0.025, 4.3, 0.012), rugMat(null, 0xd9cdbb), -4.9, 0.0125, 4.55, { cast: false })
+  put(rugPlain, new THREE.CylinderGeometry(1.1, 1.1, 0.02, 64), rugMat(null, 0xc9bba6), -2.75, 0.03, 5.55, { cast: false })
+  curvedSofa(slotOf('sofa', 'curved'), -4.9, 4.75)
+  modularSofa(slotOf('sofa', 'straight'), -4.9, 3.45, 0)
   memphisTable(room, -4.9, 4.7)
   tubChair(room, -2.6, 5.35, -2.1, P.boucle)
   put(room, discSlab(0.3, 0.26, 0.08), boucle(P.terracotta, 1.2), -5.2, 0.0, 6.35)
   modularSofa(room, x0 + 0.55, 4.45, Math.PI / 2)
-  arcFloorLamp(room, x0 + 0.5, 6.45, 0.45, lights)
+  const floorLamps = slotOf('lamps', 'floor')
+  arcFloorLamp(floorLamps, x0 + 0.5, 6.45, 0.45, lights)
   // side table by the sofa, with a lamp
   put(room, discSlab(0.24, 0.04, 0.02), mat(P.oakLight), x0 + 0.5, 0.5, 2.55)
   put(room, cyl(0.03, 0.03, 0.5, 10), mat(P.oakDark), x0 + 0.5, 0.25, 2.55)
-  put(room, sph(0.12), mat(P.terracotta, { roughness: 0.4 }), x0 + 0.5, 0.66, 2.55, { s: [1, 0.85, 1] })
-  put(room, new THREE.SphereGeometry(0.16, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat(P.boucle, { emissive: 0xffe0b0, emissiveIntensity: 0.6, side: THREE.DoubleSide }), x0 + 0.5, 0.86, 2.55)
-  lampGlows.push(glowSprite(room, x0 + 0.5, 0.88, 2.55, 0.8, 0.5))
+  put(floorLamps, sph(0.12), mat(P.terracotta, { roughness: 0.4 }), x0 + 0.5, 0.66, 2.55, { s: [1, 0.85, 1] })
+  put(floorLamps, new THREE.SphereGeometry(0.16, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat(P.boucle, { emissive: 0xffe0b0, emissiveIntensity: 0.6, side: THREE.DoubleSide }), x0 + 0.5, 0.86, 2.55)
+  lampGlows.push(glowSprite(floorLamps, x0 + 0.5, 0.88, 2.55, 0.8, 0.5))
   // prints over the sofa
   for (const [z, k] of [
     [3.65, 0],
@@ -783,26 +929,30 @@ export function buildRoom(scene) {
   }
 
   // ---------------------------------------------------------------- tall plants
-  fiddleLeafFig(room, x0 + 0.55, z0 + 0.6, 12, 2.4)
-  fiddleLeafFig(room, x1 - 0.6, z1 - 0.7, 13, 2.2)
-  monstera(room, x1 - 0.55, z0 + 0.6, 14, 2.6)
-  monstera(room, -1.5, 6.4, 15, 1.7)
-  fiddleLeafFig(room, -0.15, z0 + 0.55, 16, 1.9)
-  const doorPot = pot(room, x0 + 0.4, 1.55, 0.24, 0.42, P.sage)
-  for (let i = 0; i < 12; i++) leaf(room, leafGeo(0.36, 0.2, 0, 0.18), i % 2 ? P.leaf : P.leafDeep, x0 + 0.4, doorPot, 1.55, (i / 12) * Math.PI * 2, 0.9 - (i % 3) * 0.15)
+  // (the design keeps these in two slots: the first three always stay unless the plants are 'none', the rest are 'lush')
+  const plantsCore = slotOf('plants', 'core')
+  const plantsMore = slotOf('plants', 'more')
+  fiddleLeafFig(plantsCore, x0 + 0.55, z0 + 0.6, 12, 2.4)
+  fiddleLeafFig(plantsMore, x1 - 0.6, z1 - 0.7, 13, 2.2)
+  monstera(plantsCore, x1 - 0.55, z0 + 0.6, 14, 2.6)
+  monstera(plantsMore, -1.5, 6.4, 15, 1.7)
+  fiddleLeafFig(plantsCore, -0.15, z0 + 0.55, 16, 1.9)
+  const doorPot = pot(plantsMore, x0 + 0.4, 1.55, 0.24, 0.42, P.sage)
+  for (let i = 0; i < 12; i++) leaf(plantsMore, leafGeo(0.36, 0.2, 0, 0.18), i % 2 ? P.leaf : P.leafDeep, x0 + 0.4, doorPot, 1.55, (i / 12) * Math.PI * 2, 0.9 - (i % 3) * 0.15)
 
   // ---------------------------------------------------------------- pendants
-  pendant(room, -4.9, 4.7, 2.75, 0.4, 0xfbf3e6, lights)
-  pendant(room, -6.0, -5.9, 2.6, 0.28, 0xfbf3e6, lights, false)
-  pendant(room, -5.9, -3.9, 2.45, 0.24, 0xfbf3e6, lights, false)
-  pendant(room, 1.8, -3.8, 2.7, 0.36, 0xfbf3e6, lights)
-  pendant(room, 6.0, -3.8, 2.7, 0.36, 0xfbf3e6, lights)
-  pendant(room, 4.4, 4.2, 2.7, 0.36, 0xfbf3e6, lights)
+  const pendants = slotOf('lamps', 'pendants')
+  pendant(pendants, -4.9, 4.7, 2.75, 0.4, 0xfbf3e6, lights)
+  pendant(pendants, -6.0, -5.9, 2.6, 0.28, 0xfbf3e6, lights, false)
+  pendant(pendants, -5.9, -3.9, 2.45, 0.24, 0xfbf3e6, lights, false)
+  pendant(pendants, 1.8, -3.8, 2.7, 0.36, 0xfbf3e6, lights)
+  pendant(pendants, 6.0, -3.8, 2.7, 0.36, 0xfbf3e6, lights)
+  pendant(pendants, 4.4, 4.2, 2.7, 0.36, 0xfbf3e6, lights)
 
   // ---------------------------------------------------------------- the token rack, the extinguisher, the poster
   const rack = tokenRack(room, 6.4, z0 + 0.32, animated)
   const extinguisher = extinguisherStand(room, -0.95, -0.8)
-  const poster = posterFrame(room, 3.4, 2.15, z0)
+  const poster = posterFrame(slotOf('poster', 'on'), 3.4, 2.15, z0)
 
   // ---------------------------------------------------------------- desk pods
   const seats = []
@@ -815,7 +965,7 @@ export function buildRoom(scene) {
   let n = 0
   for (const pod of pods) {
     if (pod.rug)
-      put(room, new THREE.CylinderGeometry(2.25, 2.25, 0.02, 72), mat(0xffffff, { map: roundRugTexture(P.peach, P.terracotta), roughness: 1 }), pod.cx, 0.012, pod.cz, { cast: false })
+      put(room, new THREE.CylinderGeometry(2.25, 2.25, 0.02, 72), rugMat(roundRugTexture(P.peach, P.terracotta)), pod.cx, 0.012, pod.cz, { cast: false })
     // the shared travertine spine down the middle of the pod
     put(room, rbox(0.06, 0.16, 2.5, 0.02), mat(P.travertineDeep), pod.cx, 0.7, pod.cz)
     for (const rowZ of [pod.cz - 0.65, pod.cz + 0.65])
@@ -838,13 +988,63 @@ export function buildRoom(scene) {
     new THREE.Vector3(-3.6, 0, 1.6),
   ]
 
+  // The lamps' lights stay in the room itself, so hiding a lamp never changes the number of lights (which would make
+  // every material compile again); a hidden lamp's light is turned down instead.
+  room.updateMatrixWorld(true)
+  const lightOwner = lights.map(l => {
+    for (let p = l.parent; p; p = p.parent) if (p === slots.lamps.styles.pendants) return 'pendants'
+    return 'floor'
+  })
+  for (const l of lights) room.attach(l)
+  // each style of each slot is merged on its own, then everything else
+  for (const slot of Object.values(slots)) for (const style of Object.values(slot.styles)) batchStatic(style)
   batchStatic(room)
 
   const lightBase = lights.map(l => l.intensity)
+  const lightColour = lights.map(l => l.color.clone())
+  const lightScale = lights.map(() => 1)
   const glowBase = lampGlows.map(s => s.material.opacity)
+  const glowColour = lampGlows.map(s => s.material.color.clone())
   const sunBase = sunlit.map(m => m.opacity)
+  let night = 0
+  let current = null
 
-  return {
+  /**
+   * Restyles the room live from a design (see design.js): recolours the role materials, lays the floor, swaps or hides
+   * the furniture slots and warms or cools the lamps. Returns '' when it worked, or the reason a design was refused.
+   */
+  function applyDesign(input) {
+    const got = checkDesign(input)
+    if (!got.ok) return got.error
+    const d = got.design
+    const num = hex => parseInt(hex.slice(1), 16)
+    for (const r of roleMats.values()) r.m.color.set(offsetColour(num(d.colors[r.key]), r.key, r.hex))
+    for (const { m, mult } of rugMats) m.color.set(d.colors.rug).multiply(new THREE.Color(mult))
+    setFloor(d.floor, d.colors.floor)
+    const v = d.variants
+    const show = (slot, style, on) => (slots[slot].styles[style].visible = on)
+    for (const style of ['curved', 'straight']) show('sofa', style, v.sofa === style)
+    for (const style of ['woven', 'plain']) show('rug', style, v.rug === style)
+    show('plants', 'core', v.plants !== 'none')
+    show('plants', 'more', v.plants === 'lush')
+    show('lamps', 'pendants', v.lamps === 'all' || v.lamps === 'pendants')
+    show('lamps', 'floor', v.lamps === 'all' || v.lamps === 'floor')
+    slots.poster.group.visible = v.poster
+    // light warmth: 0.5 is the loft's own light, below it turns towards cool white, above it towards amber
+    const shift = (d.light - 0.5) * 2
+    const target = new THREE.Color(shift > 0 ? 0xff9a4a : 0xc4dcff)
+    const amount = Math.abs(shift) * 0.75
+    lights.forEach((l, i) => {
+      l.color.copy(lightColour[i]).lerp(target, amount)
+      lightScale[i] = slots.lamps.styles[lightOwner[i]].visible ? 1 : 0
+    })
+    lampGlows.forEach((s, i) => s.material.color.copy(glowColour[i]).lerp(target, amount))
+    current = d
+    world.setNight(night)
+    return ''
+  }
+
+  const world = {
     seats,
     doorway,
     lounge,
@@ -853,18 +1053,34 @@ export function buildRoom(scene) {
     rack,
     extinguisher,
     poster,
+    /** The studio cat's group, and the lamp glow sprites (the interact feature moves and switches them). */
+    cat,
+    lampGlows,
+    /** The rolling whiteboard: its group, the board mesh and the board's size. */
+    whiteboard: room.userData.whiteboard,
+    /** The windows, for the weather: their x ranges, the sill and head heights, the wall's z, the two skies and the glass. */
+    windows: { list: WINDOWS, y: WIN_Y, z: z0, sky, nightSky, glass },
+    /** A multiplier on the sunbeams and dust (the weather weakens or strengthens them). */
+    sunGain: 1,
     /** 0 = full day, 1 = night: the sky in the windows, the sunbeams and dust, and how bright the lamps are. */
     setNight(n) {
       nightSky.material.opacity = n
       nightSky.visible = n > 0.002
-      sunlit.forEach((m, i) => (m.opacity = sunBase[i] * (1 - n)))
-      lights.forEach((l, i) => (l.intensity = lightBase[i] * (1 + n * 1.6)))
+      sunlit.forEach((m, i) => (m.opacity = Math.min(1, sunBase[i] * (1 - n) * (this.sunGain ?? 1))))
+      night = n
+      lights.forEach((l, i) => (l.intensity = lightBase[i] * (1 + n * 1.6) * lightScale[i]))
       lampGlows.forEach((s, i) => (s.material.opacity = Math.min(1, glowBase[i] * (1 + n * 1.3))))
     },
     update(t, dt) {
       for (const f of animated) f(t, dt)
     },
+    /**
+     * The room's look. `apply(design)` restyles it live (returns '' or the reason a design was refused), `defaults` is the
+     * loft as it has always looked, `current()` the design now showing.
+     */
+    design: { defaults: DEFAULT_DESIGN, apply: applyDesign, current: () => current ?? DEFAULT_DESIGN },
   }
+  return world
 }
 
 /**
@@ -875,10 +1091,11 @@ function makeSeat(room, x, z, face, index, chairColour, animated) {
   const deskX = x + face * 0.7
   const desk = group(room, deskX, 0, z, -face * (Math.PI / 2)) // local +z points at the sitter
   const top = 0.62
-  put(desk, rbox(1.25, 0.05, 0.7, 0.025), mat(P.travertine, { roughness: 0.5 }), 0, top - 0.025, 0)
-  put(desk, rbox(1.27, 0.035, 0.72, 0.017), mat(P.ash, { roughness: 0.6 }), 0, top - 0.065, 0)
-  for (const dx of [-0.56, 0.56]) put(desk, rbox(0.06, top - 0.08, 0.6, 0.03), mat(P.ash, { roughness: 0.6 }), dx, (top - 0.08) / 2, 0)
-  put(desk, rbox(1.0, 0.26, 0.03, 0.015), mat(P.ash, { roughness: 0.6 }), 0, top - 0.25, -0.3)
+  const deskAsh = roleMat('desks', P.ash, { roughness: 0.6 })
+  put(desk, rbox(1.25, 0.05, 0.7, 0.025), roleMat('desks', P.travertine, { roughness: 0.5 }), 0, top - 0.025, 0)
+  put(desk, rbox(1.27, 0.035, 0.72, 0.017), deskAsh, 0, top - 0.065, 0)
+  for (const dx of [-0.56, 0.56]) put(desk, rbox(0.06, top - 0.08, 0.6, 0.03), deskAsh, dx, (top - 0.08) / 2, 0)
+  put(desk, rbox(1.0, 0.26, 0.03, 0.015), deskAsh, 0, top - 0.25, -0.3)
 
   // the screen: people who face the camera (face 1) get a low laptop so their faces stay in view; people with their
   // backs to the camera get a slim aluminium monitor

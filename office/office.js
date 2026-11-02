@@ -22,6 +22,7 @@ import * as THREE from 'three'
 import { RoomEnvironment } from './vendor/RoomEnvironment.js'
 import { loadModelConfig, prefetchModels, vrmRig } from './avatars.js'
 import { makeChaos } from './chaos.js'
+import { makeFeatures } from './features.js'
 import { TILE, makeFx } from './fx.js'
 import { codeScreen } from './kit.js'
 import { AGENT_LOOKS, CLAUDE_LOOK, lookFor, makePerson } from './people.js'
@@ -108,6 +109,8 @@ function nowHour() {
 }
 
 const tmpCol = new THREE.Color()
+/** Lighting a feature may change (see features.js): 1 is the light the clock gives. */
+const env = { sun: 1, sky: 1 }
 function light(dt) {
   const goal = darkness(nowHour())
   night = night < 0 ? goal : night + (goal - night) * (1 - Math.exp(-dt * 0.9))
@@ -121,7 +124,11 @@ function light(dt) {
   sun.intensity = lerp(1.65, 0.32, n) * (1 - dusk * 0.15)
   fill.intensity = lerp(0.75, 0.16, n)
   fill.color.copy(tmpCol.set(0xfff0e2).lerp(NIGHT.hemi, n))
-  scene.environmentIntensity = lerp(0.42, 0.16, n)
+  // a feature may dim the light (weather on a grey day): env.sun and env.sky scale it
+  sun.intensity *= env.sun
+  hemi.intensity *= env.sky
+  fill.intensity *= env.sky
+  scene.environmentIntensity = lerp(0.42, 0.16, n) * (0.6 + 0.4 * env.sky)
   renderer.toneMappingExposure = lerp(1.02, 1.1, n)
   world.setNight(n)
   document.body.classList.toggle('night', n > 0.5)
@@ -188,7 +195,11 @@ canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId)
 })
 canvas.addEventListener('pointermove', e => {
-  if (!drag) return
+  if (!drag) {
+    // over the room without dragging: a feature may show that something there can be clicked
+    if (e.pointerType === 'mouse') canvas.style.cursor = features.hover(hitAt(e.clientX, e.clientY, false)) || ''
+    return
+  }
   const dx = e.clientX - drag.x
   const dy = e.clientY - drag.y
   drag.x = e.clientX
@@ -381,6 +392,8 @@ function seatForAgent(lead) {
 function walkToSeat(entry, from) {
   const { p, seat } = entry
   entry.state = 'entering'
+  // a feature may stop the newcomer somewhere first (an agent being briefed at their lead's desk)
+  from = features.arrive(entry, from) ?? from
   p.walk([...from, v3(seat.approach.x, aisleZ), seat.approach])
     .call(() => (seat.pullWant = 1))
     .turn(faceYaw(seat), 0.3)
@@ -485,14 +498,17 @@ function leave(entry) {
     p.rig.dispose?.()
     entry.badge.el.remove()
     people.delete(entry.id)
+    features.gone(entry)
   }
   if (was === 'waiting' || !seat) {
     if (waiting.includes(entry)) waiting.splice(waiting.indexOf(entry), 1)
     p.call(() => p.walk([v3(p.root.position.x, aisleZ), ...out]).call(bye))
     return
   }
-  if (was === 'panic' || was === 'firefighting' || was === 'returning') {
-    // up and about (running from a fire, fetching the extinguisher): free the desk and head straight out
+  if (was === 'panic' || was === 'firefighting' || was === 'returning' || entry.away) {
+    // up and about (running from a fire, fetching the extinguisher, away from the desk for a feature): free the desk
+    // and head straight out
+    entry.away = null
     p.clear()
     p.seated = false
     seat.want = 0
@@ -514,8 +530,40 @@ function leave(entry) {
       p.seat = null
       seatFreed(seat)
     })
-    .walk([v3(seat.approach.x, aisleZ), ...out])
-    .call(bye)
+  // a feature may send them somewhere on the way out (an agent reporting back at their lead's desk)
+  const from = features.depart(entry, [v3(seat.approach.x, aisleZ)]) ?? [v3(seat.approach.x, aisleZ)]
+  p.walk([...from, ...out]).call(bye)
+}
+
+/** Queues a person standing up from their desk and stepping out to its approach point (for features). */
+function standUp(entry) {
+  const { p, seat } = entry
+  if (!seat) return p
+  return p
+    .call(() => (seat.want = 0))
+    .stand()
+    .call(() => (seat.pullWant = 1))
+    .wait(0.2)
+    .step(seat.approach, 0.5)
+    .call(() => (seat.pullWant = 0))
+}
+
+/** Queues a person, standing at their desk's approach point, sitting back down and getting back to work (for features). */
+function sitDown(entry) {
+  const { p, seat } = entry
+  if (!seat) return p
+  return p
+    .call(() => (seat.pullWant = 1))
+    .turn(faceYaw(seat), 0.3)
+    .step(seatSpot(seat), 0.55)
+    .sit()
+    .call(() => {
+      seat.pullWant = 0
+      entry.away = null
+      if (entry.state !== 'leaving') entry.state = 'working'
+    })
+    .wait(0.35)
+    .call(() => (seat.want = 1))
 }
 
 function seatFreed(seat) {
@@ -546,6 +594,7 @@ function refreshBadge(entry) {
   if (state === 'working' && p.cheer > 0) label = 'Yes!'
   if (strikes) dot = strikes >= 5 ? '#ff4a3d' : '#e98a5a'
   if (state === 'entering' || state === 'leaving') dot = '#d8c6b0'
+  label = features.label(entry, label) ?? label
   setText(badge.label, label)
   const { persona } = entry
   setText(badge.name, persona.name)
@@ -586,6 +635,18 @@ function say(entry, moment) {
   const v = entry.voice
   const line = pickLine(entry.persona, moment, v.last)
   if (!line) return
+  v.text = v.last = line
+  v.left = bubbleTime(line)
+  v.cool = CHATTY ? 2 : 10
+  entry.p.talking = Math.min(v.left - 0.5, 0.6 + line.length * 0.05)
+  setText(entry.badge.say, line)
+  entry.badge.bubble.classList.add('show')
+}
+
+/** Puts up a speech bubble with these exact words (for features with moments of their own). */
+function sayText(entry, line) {
+  if (!line || !entry) return
+  const v = entry.voice
   v.text = v.last = line
   v.left = bubbleTime(line)
   v.cool = CHATTY ? 2 : 10
@@ -649,9 +710,18 @@ function personAt(x, y) {
   return people.get(hits[0]?.object.userData.personId)
 }
 
+/** What is under the pointer, for the features' click and hover hooks: a ray from the camera, and the person there. */
+function hitAt(x, y, withPerson = true) {
+  const ray = new THREE.Raycaster()
+  ray.setFromCamera(new THREE.Vector2((x / window.innerWidth) * 2 - 1, -(y / window.innerHeight) * 2 + 1), camera)
+  return { x, y, ray, person: withPerson ? personAt(x, y) : undefined }
+}
+
 function pick(x, y) {
-  const hit = personAt(x, y)
-  for (const e of people.values()) e.open = e === hit ? !e.open : false
+  const hit = hitAt(x, y)
+  // a feature may take the click (the cat, the coffee machine...); otherwise a click on a person opens their card
+  if (features.click(hit)) return
+  for (const e of people.values()) e.open = e === hit.person ? !e.open : false
 }
 
 // ------------------------------------------------------------------------------------------------ live state
@@ -713,6 +783,8 @@ function apply(state) {
   const five = list.map(s => s.state.usage?.fiveHour).filter(Number.isFinite)
   const usage = forcedUsage ?? [st?.usage?.context, five.length ? Math.max(...five) : null]
   world.rack.set(usage[0] ?? null, usage[1] ?? null)
+  lastSessions = list
+  features.apply(state, list)
 }
 
 function connect() {
@@ -827,7 +899,7 @@ function demo() {
 function multiDemo() {
   hudLive.textContent = 'demo'
   const count = Math.max(1, Math.min(4, Number(params.get('sessions')) || 3))
-  const names = ['fed_news', 'pixel-office', 'thb_lstm_v3', 'gold_gpt2']
+  const names = ['my-app', 'website', 'data-tools', 'notes']
   const kinds = ['Explore', 'Plan', 'general-purpose']
   const codes = ['thinking', 'reading', 'refactoring', 'testing', 'searching', 'writing', 'terminal', 'planning']
   const moodOf = w => (w.strikes >= 5 ? 'panic' : w.strikes ? 'stressed' : /writing|refactoring|testing/.test(w.code) ? 'flow' : /thinking|planning/.test(w.code) ? 'thinking' : 'calm')
@@ -860,6 +932,39 @@ function multiDemo() {
 }
 
 const chaos = makeChaos(scene, { world, people, fx, seatSpot, faceYaw, aisleZ })
+let lastSessions = []
+// the feature modules (./features.js says what each one gets and may answer)
+const features = makeFeatures({
+  THREE,
+  scene,
+  renderer,
+  camera,
+  world,
+  people,
+  fx,
+  chaos,
+  params,
+  ROOM,
+  aisleZ,
+  v3,
+  seatSpot,
+  faceYaw,
+  /** Whether this page plays a made-up session (?demo, ?sessions, ?still, ?lineup) rather than the live office. */
+  isDemo: DEMO || STILL >= 0 || params.has('sessions'),
+  /** Lighting a feature may scale (weather): { sun, sky }, 1 = as the clock says. */
+  env,
+  /** The sessions of the last update. */
+  sessions: () => lastSessions,
+  /** The lead of a person's session (the person themself for a lead). */
+  leadOf: entry => (entry?.isLead ? entry : people.get(entry?.info.lead)),
+  say,
+  sayText,
+  standUp,
+  sitDown,
+  focusOn,
+  /** Feeds the page a made-up update, as the server would send it (for demo switches). */
+  apply: state => apply(state),
+})
 if (MODELS?.credits.length) document.getElementById('hud').title = `Characters: ${MODELS.credits.join(' · ')}`
 
 /**
@@ -1082,6 +1187,7 @@ function step(dt) {
   const t = simTime
   world.update(t, dt)
   chaos.update(dt, t)
+  features.step(dt, t)
   let nearDoor = false
   for (const entry of people.values()) {
     if (!entry.ready && performance.now() - entry.born > 6500) entry.ready = true
@@ -1124,6 +1230,7 @@ window.__studio = {
   world,
   chaos,
   fx,
+  features,
   models: MODELS,
   apply,
   /** A one-line summary per person, for checks. */

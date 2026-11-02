@@ -47,7 +47,16 @@ export type Usage = { context: number | null; fiveHour: number | null }
 /** `auto` follows the clock; `day` and `night` hold the window's sky. */
 export type SkyMode = 'auto' | 'day' | 'night'
 
-export type StudioInfo = { clock: string; hour: number; main: Worker; helpers: Worker[]; usage: Usage; sky: SkyMode }
+export type StudioInfo = {
+  clock: string
+  hour: number
+  main: Worker
+  helpers: Worker[]
+  usage: Usage
+  sky: SkyMode
+  /** What each feature module (hooks/features/) tells the window, by the feature's name; plain JSON values. */
+  extras?: Record<string, unknown>
+}
 
 declare module 'claude-code' {
   interface PluginState {

@@ -42,6 +42,53 @@ office loft from above at an angle, like a building in a tycoon game. Claude wor
   The next successful edit or command puts the fire out: a hiss of steam, everyone goes back to their desk, and the
   extinguisher goes back on its hook. A run of errors with nothing new for three minutes also fades by itself.
   Failed look-arounds (a search that finds nothing, a file that is not there) do not count as errors.
+- **Your turn.** When a session finishes and waits for you, its Claude stands up, waves and says "Your turn!", and a
+  small brass bell on her desk glows. When a session needs you to approve a tool call, the bell swings and glows red,
+  her badge says *Needs your OK · <tool>*, she waves again every 25 seconds, and the window's title starts with "(!)".
+  (In auto mode a request the classifier settles may show for a moment too: the mod cannot tell those apart.)
+- **Coffee breaks.** A Claude who has waited for you for more than 45 seconds gets up, fetches a coffee and goes to the
+  bistro table, the lounge or the sofa. Two Claudes on a break sit together and chat. She walks back to her desk as
+  soon as you type, or when a tool call needs your OK.
+- **The whiteboard.** Each session's task list shows as sticky notes on the rolling whiteboard, one column per
+  session in its Claude's colour: finished tasks fade and get a tick, the task in progress has a red dot. When the list
+  changes, that Claude walks over and writes on the board (at most once every 40 seconds).
+- **Briefings and reports.** A new agent first stops at its Claude's desk: she says what the task is, the agent says
+  "On it!", then goes to its own desk. An agent that finished walks back, puts a folder on her desk ("Report's on your
+  desk!") and leaves. The folders pile up and fade after 30 seconds.
+- **Paperwork.** When Claude Code compacts a session's conversation, its Claude carries a box of papers to the shredder
+  by the right wall, the context strip on the token rack drains, she stretches and goes back to work.
+- **The office grows.** The office keeps lifetime counts across all sessions (agents hired, tests passed, fires put
+  out, files edited, sessions) in `~/.claude/studio-stats.json`. A trophy shelf on the back wall shows them, with the
+  next unlock. Milestones add things to the room: an aquarium (10 agents), an arcade machine (25 tests), a gold fire
+  trophy (3 fires), a "SHIP IT" neon sign (100 files) and a big plant (20 sessions), each with confetti and a banner.
+- **Shift reports.** When a session ends, a card at the bottom left says how its shift went: how long it ran, files
+  changed, agents hired, tests passed and fires put out. Click it to close it.
+- **Ask the office.** The button at the top right opens a panel: send a prompt to any session (it goes in as if you
+  typed it there, and runs as soon as that session is free), start an agent in a session, or open a new terminal
+  running Claude Code in a folder (a new session, whose Claude walks in; tick *Remote Control* to reach that session
+  from the Claude app on your phone or tablet). Only the window a session opened can do this:
+  the session gives it a key in its address after a `#`, which the browser never sends anywhere.
+- **Things to do in the room.** Hover over something and a hint says what a click does. Pet the cat (it wakes,
+  purrs, and sometimes trots off to another cosy spot; it runs from fires). Brew a coffee at the machine and click a
+  person to hand it over (a stressed worker calms down for a minute). Water the plants (they grow, and shrink back
+  slowly if you forget them). Switch the lamps off and on. Feed the fish, play a 20-second Bug Catcher game on the
+  arcade machine, and after a fire catch the glowing bugs for the jar on the trophy shelf. Clicking a person makes them
+  wave and say something, and still opens their card. What you do here stays in this window: it never reaches Claude.
+- **Your own design.** The panel's *Design* tab changes the room: eight ready-made themes (cosy loft, Scandinavian,
+  night neon, forest cabin, pastel, monochrome, sunset, ocean), a colour for each part (walls, floor, wood, accents,
+  sofa, rugs, desks, plants, pots), the floor (oak, concrete, carpet, tiles), sofa, rug, plant and lamp styles, the
+  poster, and how warm the lamps are. You see changes at once; *Save* keeps the design (in
+  `~/.claude/studio-room.json`) and shows it in every window. *Export* saves the design as a file and *Import* reads
+  one, so you can swap designs with friends.
+- **Real weather.** Type your city in the *Weather* tab. The office then follows today's forecast from Open-Meteo (free,
+  no account; only your city's position is sent, every 30 minutes): clouds dim the light, rain runs down the windows,
+  snow piles up on the sills, storms flash, fog hazes the glass. A small line under the info box shows the weather.
+- **Your own characters.** In the *Characters* tab, drop in a `.vrm` file. The office checks it, reads its name, author
+  and licence (and asks you to confirm you may use it when the licence limits that), saves it to
+  `~/.claude/studio-models`, and asks Claude (the small Haiku model, in one of your sessions) to write it a persona:
+  name, colour, a short text and speech lines. You can make any character Claude's own, an agent, or switch it off
+  (`unused` in models.json), edit or rewrite its persona, or remove it (the file moves to a `removed` folder). Reload
+  the window to see the change.
 - **The token rack.** A walnut server rack against the back wall has two LED strips. The left one (*ctx*) fills with how
   much of the context window is used. The right one (*5h*) fills with how much of your five-hour usage limit is used.
   They are green under 50 %, amber from 50 % to 80 %, and glowing hot pink from 80 %. The neon *tokens* sign above
@@ -143,10 +190,14 @@ If the window does not land in its place, `%TEMP%\claude-studio-window.log` says
 | `office/persona.js` | Personas: the name, colour, card text and speech lines of each person, read from `models.json`. |
 | `office/fx.js` | The little effects: notes, question marks, sweat, steam, smoke, fire, bugs, water, foam and confetti. |
 | `office/chaos.js` | Smoke and fire after errors in a row, the panic laps, and fetching and using the extinguisher. |
+| `office/features.js`, `office/features/` | The feature modules of the page (your turn, coffee breaks, whiteboard, briefings, paperwork, progress, shift reports, the ask panel). `features.js` says what hooks a feature may answer. |
+| `office/server-features/` | The server's feature modules: the room's design, the weather and the characters (uploads, models.json). |
+| `office/design.js`, `office/panel.js` | The themes and the rules a design must keep (shared by the page and the server); the panel and its tabs. |
+| `hooks/features/` | The feature modules of the mod: what each feature tells the window (`kit.ts` describes the contract and the moments the core mod announces). |
 | `office/vendor/` | three.js 0.170.0 with helper files including its GLTF loader (MIT licence, see `THREE_LICENSE`), and three-vrm 3.5.5 (MIT licence, see `THREE_VRM_LICENSE`). They are included so the window works offline. |
 | `hooks/studio.tsx` | The older terminal version of the office, used by `/office pane` and when the window cannot open. |
 
-The window opens as an app window in Microsoft Edge, or in Google Chrome if Edge is not installed. If neither is
+On Windows the window opens as an app window in Microsoft Edge, or in Google Chrome if Edge is not installed (on Linux and macOS, see *Install*). If neither is
 installed, it opens in your default browser. It needs Node.js on your `PATH` (`node --version` should work).
 
 To see the office without Claude Code, start the server and open the page with `?demo`:
@@ -174,11 +225,14 @@ More switches for checking one thing at a time (add them after `?`, joined with 
 | `models=0` | The built-in people only. |
 | `focus=claude` (or an agent's id, or `rack`, `poster`, `fire`) and `zoom=3` | Starts close up. |
 | `debug` | Prints positions, moods, fires and draw calls to the console every second. |
+| `yourturn`, `coffee`, `whiteboard`, `briefing`, `paperwork`, `shift` (or `shift=now`), `progress=N` (`&grow`) | Fakes one feature's data on a demo page, e.g. `?sessions=2&coffee`. |
+| `design=<theme>` (`loft`, `scandi`, `neon`, `cabin`, `pastel`, `mono`, `sunset`, `ocean`), `weather=<kind>` (`clear`, `partly`, `cloudy`, `fog`, `drizzle`, `rain`, `heavy`, `storm`, `snow`), `interact` (hints on everything clickable; `&bugs` lets bugs loose), `characters` | The room's design, the weather, the things to click, and sample cards in the Characters tab. |
 
 ## Install
 
-The studio was made and tested on Windows 11 (the window placing helper is a PowerShell script). It needs Node.js
-and Microsoft Edge or Google Chrome.
+The studio was made and tested on Windows 11 and also runs on Linux (for example Ubuntu 24.04) and macOS. It needs
+Node.js on your `PATH` (`node --version` should work) and a Chromium-family browser: Microsoft Edge or Google Chrome
+on Windows; Google Chrome, Chromium, Edge, Brave or Vivaldi on Linux (otherwise it opens in your default browser).
 
 This repository is its own marketplace. Clone it, then add it from a terminal:
 
@@ -190,6 +244,29 @@ claude plugin install pixel-office@pixel-office-local --scope user
 
 After that, every new Claude Code session opens the studio. The install reads the cloned folder in place, so a change
 made there shows up in the next session (or after `/reload-plugins`).
+
+### On Linux
+
+```
+sudo apt install nodejs git            # or Node.js from nodejs.org / nvm; any recent version
+git clone https://github.com/taminggg1-cmyk/claude-studio ~/claude-studio
+claude plugin marketplace add ~/claude-studio
+claude plugin install pixel-office@pixel-office-local --scope user
+```
+
+- The window opens as an app window of the first browser it finds (Chrome, Chromium, Edge, Brave, Vivaldi). On a
+  tiling window manager it is tiled like any window. In i3, add this to `~/.config/i3/config` to float it in the
+  top-right corner instead:
+
+  ```
+  for_window [title="^Claude's studio"] floating enable, resize set 960 560, move position 960 0
+  ```
+
+- `/office` brings the window forward (through `i3-msg` in i3, or `wmctrl` where it is installed), or opens a new one.
+- *New session* in the panel opens a new tmux window in that folder when tmux is running, else a new terminal
+  (`x-terminal-emulator`, GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, foot, xterm...).
+- The office server runs in a session of its own (`setsid`), so it keeps going when the terminal that started it
+  closes, and stops 45 seconds after the last Claude Code session ends.
 
 No character models come with the studio. Without any, everyone is a built-in chibi figure; see *Character models*
 above to add your own.
