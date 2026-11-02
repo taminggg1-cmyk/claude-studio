@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude's studio</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M8 38 32 26l24 12-24 12z' fill='%23e8b48f'/%3E%3Cpath d='M8 38v6l24 12V50z' fill='%23c8775a'/%3E%3Cpath d='M56 38v6L32 56V50z' fill='%239fb39a'/%3E%3C/svg%3E" />
+    <style>
+      :root {
+        --bg-top: #f7f1e8;
+        --bg-bottom: #ead9c4;
+        --card: rgba(255, 251, 245, 0.9);
+        --card-line: rgba(140, 110, 80, 0.16);
+        --ink: #4a3b31;
+        --muted: #8a7766;
+        --shadow: 0 6px 18px rgba(110, 80, 50, 0.16), 0 1px 3px rgba(110, 80, 50, 0.12);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: radial-gradient(120% 90% at 50% 20%, var(--bg-top) 0%, var(--bg-bottom) 100%);
+        color: var(--ink);
+        font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        user-select: none;
+        transition: background 2s ease;
+      }
+      body.night {
+        --bg-top: #2b2a45;
+        --bg-bottom: #15142a;
+      }
+      body.night #hint {
+        color: #b9b0c8;
+      }
+      .pill.alarm {
+        border-color: rgba(255, 74, 61, 0.55);
+        animation: alarm 0.8s ease-in-out infinite;
+      }
+      @keyframes alarm {
+        0%,
+        100% {
+          box-shadow: var(--shadow);
+        }
+        50% {
+          box-shadow: 0 0 0 4px rgba(255, 74, 61, 0.28), var(--shadow);
+        }
+      }
+      canvas#scene {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: grab;
+      }
+      canvas#scene.dragging {
+        cursor: grabbing;
+      }
+      #badges {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      .badge {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform: translate(-50%, -100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        transition: opacity 0.45s ease;
+        will-change: transform;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 4px 12px 4px 4px;
+        border-radius: 999px;
+        background: var(--card);
+        border: 1px solid var(--card-line);
+        box-shadow: var(--shadow);
+        font-size: 12.5px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+        backdrop-filter: blur(6px);
+      }
+      .pill .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--dot, #c9b8a4);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot, #c9b8a4) 25%, transparent);
+      }
+      .pill.busy .dot {
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      /* the name tag at the front of the pill: the persona's name in its own colour, then the role (Claude's role,
+         or the agent type) for Claude, a clicked person, or everyone when zoomed in close */
+      .tag {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        padding: 2px 10px 3px 9px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--tag, #c8775a) 90%, white), color-mix(in srgb, var(--tag, #c8775a) 80%, black));
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-shadow: 0 1px 0 color-mix(in srgb, var(--tag, #c8775a) 55%, black);
+        color: #fff;
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.4);
+        white-space: nowrap;
+      }
+      .tag .role {
+        display: none;
+        font-size: 10.5px;
+        font-weight: 600;
+        opacity: 0.88;
+      }
+      .badge.main .tag .role,
+      .badge.open .tag .role,
+      body.close .tag .role {
+        display: inline;
+      }
+      .badge.main .tag .name::before {
+        content: '★ ';
+        color: #ffe9a8;
+      }
+      /* the speech bubble: a line from the persona, for a few seconds */
+      .bubble {
+        position: relative;
+        display: none;
+        max-width: 220px;
+        margin-bottom: 7px;
+        padding: 6px 12px;
+        border-radius: 14px;
+        background: #fffdf9;
+        border: 2px solid var(--tag, #c8775a);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        font-size: 12.5px;
+        font-weight: 600;
+        line-height: 1.3;
+        text-align: center;
+        white-space: normal;
+        transform-origin: 50% 100%;
+      }
+      .bubble.show {
+        display: block;
+        animation: pop 0.3s cubic-bezier(0.3, 1.6, 0.5, 1);
+      }
+      .bubble::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        bottom: -7px;
+        width: 10px;
+        height: 10px;
+        background: #fffdf9;
+        border-right: 2px solid var(--tag, #c8775a);
+        border-bottom: 2px solid var(--tag, #c8775a);
+        transform: translateX(-50%) rotate(45deg);
+      }
+      @keyframes pop {
+        from {
+          transform: scale(0.55);
+          opacity: 0;
+        }
+        to {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+      /* the persona card: who this is, shown when you click them */
+      .card {
+        display: none;
+        max-width: 240px;
+        padding: 7px 11px;
+        border-radius: 12px;
+        background: var(--card);
+        border: 1px solid var(--card-line);
+        border-top: 3px solid var(--tag, #c8775a);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        font-size: 11.5px;
+        line-height: 1.35;
+        white-space: normal;
+      }
+      .badge.open .card:not(:empty) {
+        display: block;
+      }
+      .detail {
+        max-width: 230px;
+        padding: 2px 9px;
+        border-radius: 999px;
+        background: rgba(255, 251, 245, 0.72);
+        color: var(--muted);
+        font-size: 11px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: none;
+      }
+      .badge.open .detail:not(:empty),
+      .badge.main .detail:not(:empty),
+      body.close .detail:not(:empty) {
+        display: block;
+      }
+      .badge .stem {
+        width: 2px;
+        height: 10px;
+        border-radius: 2px;
+        background: rgba(140, 110, 80, 0.22);
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.35);
+        }
+      }
+      #hud {
+        position: fixed;
+        left: 18px;
+        top: 16px;
+        padding: 12px 16px 12px 14px;
+        border-radius: 16px;
+        background: var(--card);
+        border: 1px solid var(--card-line);
+        box-shadow: var(--shadow);
+        min-width: 210px;
+        max-width: calc(100vw - 36px);
+      }
+      #hud h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #hud h1::before {
+        content: '';
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        background: linear-gradient(135deg, #e8b48f, #c8775a);
+        transform: rotate(45deg);
+      }
+      #hud p {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      #live {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      #live::before {
+        content: '';
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #8fae88;
+      }
+      #live.off::before {
+        background: #c9a58d;
+      }
+      #hint {
+        position: fixed;
+        right: 16px;
+        bottom: 12px;
+        font-size: 11.5px;
+        color: var(--muted);
+        opacity: 0.85;
+      }
+      #ended {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(247, 241, 232, 0.55);
+        backdrop-filter: blur(3px);
+      }
+      #ended.show {
+        display: flex;
+      }
+      #ended div {
+        padding: 18px 24px;
+        border-radius: 16px;
+        background: var(--card);
+        border: 1px solid var(--card-line);
+        box-shadow: var(--shadow);
+        font-size: 14px;
+        text-align: center;
+      }
+      @media (max-width: 520px) {
+        #hint {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+    <div id="badges"></div>
+    <div id="hud">
+      <h1>Claude's studio</h1>
+      <p><span id="session"></span><span id="team">just Claude today</span> · <span id="clock">--:--</span> · <span id="live" class="off">connecting</span></p>
+    </div>
+    <div id="hint">drag to turn · right-drag to move · scroll to zoom · click someone to meet them · double-click someone to look closer</div>
+    <div id="ended"><div>Every Claude session has ended.<br />You can close this window.</div></div>
+    <script type="importmap">
+      { "imports": { "three": "./vendor/three.module.min.js" } }
+    </script>
+    <script type="module" src="./office.js"></script>
+  </body>
+</html>

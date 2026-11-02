@@ -1,0 +1,6 @@
+{
+  "name": "pixel-office-local",
+  "description": "Claude's studio: a cosy isometric office window beside the CLI.",
+  "owner": { "name": "taminggg1-cmyk" },
+  "plugins": [{ "name": "pixel-office", "source": "./" }]
+}
