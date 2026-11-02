@@ -19,6 +19,17 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Mood, SkyMode, StudioInfo, Usage, Worker, WorkerCode } from '../types'
 import type { Code as SceneCode, SceneProps } from './studio'
+import { FEATURES } from './features'
+import { installControl, runControlCommand, signalControl } from './features/control'
+import type { Command } from './features/control'
+import type { OfficePath, Signal, SignalData } from './features/kit'
+import { installPaperwork, signalPaperwork } from './features/paperwork'
+import { installProgress, signalProgress, takeProgressStats } from './features/progress'
+import { installShiftReport, signalShiftReport } from './features/shift-report'
+import { installWhiteboard, signalWhiteboard } from './features/whiteboard'
+import { installYourTurn, signalYourTurn } from './features/your-turn'
+import { runCharactersCommand } from './features/characters'
+import type { InboxCommand } from './features/kit'
 
 const PANE = 'office'
 const TITLE = "Claude's studio"
@@ -204,23 +215,28 @@ function streakOf(who: string): Streak {
  * permission denied) counts for nothing, and neither does a failed look-around (a call the engine judged read-only,
  * such as a `grep` that found nothing or a file that is not there).
  */
-export function noteResult(who: string, tool: string, input: Record<string, unknown>, result: unknown, now: number): void {
-  if (!result || typeof result !== 'object') return
+export function noteResult(who: string, tool: string, input: Record<string, unknown>, result: unknown, now: number): Outcome {
+  if (!result || typeof result !== 'object') return null
   const r = result as { deny?: unknown; isError?: unknown; isReadOnly?: unknown }
-  if (r.deny !== undefined) return
-  if (r.isError === true && r.isReadOnly === true) return
+  if (r.deny !== undefined) return null
+  if (r.isError === true && r.isReadOnly === true) return null
   const s = streakOf(who)
   if (r.isError === true) {
     s.strikes = Math.min(9, s.strikes + 1)
     s.lastError = now
-    return
+    return 'error'
   }
   const isTest = /^(Bash|PowerShell)$/.test(tool) && typeof input.command === 'string' && TEST_COMMAND.test(input.command)
+  const wasOnFire = s.strikes >= 5
   if (FIXES.test(tool) && s.strikes > 0) {
     s.strikes = 0
     s.cheer++
   } else if (isTest) s.cheer++
+  return wasOnFire && s.strikes === 0 ? 'fire-out' : isTest ? 'test-passed' : 'ok'
 }
+
+/** How a tool call went, for the features: an error that counts, the end of a desk fire, a passing test, or fine. */
+type Outcome = 'error' | 'fire-out' | 'test-passed' | 'ok' | null
 
 export function moodOf(code: WorkerCode, strikes: number): Mood {
   if (strikes >= 5) return 'panic'
@@ -320,6 +336,7 @@ async function publish($: EngineInterface): Promise<void> {
     }),
     usage,
     sky,
+    extras: featureExtras(),
   }
   const key = JSON.stringify(next)
   if (key === published) return
@@ -354,6 +371,7 @@ async function syncAgents($: EngineInterface): Promise<void> {
       continue
     }
     const k = arrivals++
+    emit($, 'agent-hired', { agentId: id, agentType: a.type, task: a.description })
     helpers.set(id, {
       name,
       type: a.type,
@@ -368,6 +386,7 @@ async function syncAgents($: EngineInterface): Promise<void> {
     if (!live.has(id)) {
       // an agent that finished its task stays a moment to cheer; one that failed or was stopped just leaves
       if (completed.has(id) && !h.doneAt) {
+        emit($, 'agent-done', { agentId: id, agentType: h.type })
         h.doneAt = now
         streakOf(id).cheer++
         streakOf(id).strikes = 0
@@ -381,13 +400,27 @@ async function syncAgents($: EngineInterface): Promise<void> {
   await publish($)
 }
 
+/** Which kind of computer this is: Windows, a Mac, or Linux (and other Unix-likes). */
+let platform: 'win' | 'mac' | 'linux' | '' = ''
+
+async function platformOf($: EngineInterface): Promise<'win' | 'mac' | 'linux'> {
+  if (platform) return platform
+  if (/^[A-Za-z]:[\\/]/.test($.plugin.root)) return (platform = 'win')
+  const ran = await $.process.run(['uname', '-s'], { timeoutMs: 5000 }).catch(() => undefined)
+  return (platform = ran?.stdout.trim() === 'Darwin' ? 'mac' : 'linux')
+}
+
+/** The local time zone's offset from UTC, in minutes, from the system itself (Windows: PowerShell; elsewhere: date). */
 async function findTimezone($: EngineInterface): Promise<void> {
   try {
+    const isWin = (await platformOf($)) === 'win'
     const ran = await $.process.run(
-      ['powershell', '-NoProfile', '-Command', '[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now).TotalMinutes'],
+      isWin ? ['powershell', '-NoProfile', '-Command', '[int][TimeZoneInfo]::Local.GetUtcOffset([DateTime]::Now).TotalMinutes'] : ['date', '+%z'],
       { timeoutMs: 8000 },
     )
-    const minutes = Number.parseInt(ran.stdout.trim(), 10)
+    const out = ran.stdout.trim()
+    const zone = /^([+-])(\d\d)(\d\d)$/.exec(out)
+    const minutes = isWin ? Number.parseInt(out, 10) : zone ? (zone[1] === '-' ? -1 : 1) * (Number(zone[2]) * 60 + Number(zone[3])) : Number.NaN
     if (ran.exitCode === 0 && Number.isFinite(minutes)) {
       tzMinutes = minutes
       await publish($)
@@ -411,7 +444,7 @@ const APP_BROWSERS = [
 // it as a process of its own, so it outlives that session; it writes ~/.claude/studio-office.json with its port and
 // token, and every later session joins it through that file. Each session sends its own studio (its lead and agents)
 // under its own id, and the window shows all of them in one room.
-type Office = { port: number; token: string; windows: number }
+type Office = { port: number; token: string; pageKey: string; windows: number }
 let office: Office | null = null
 let joining = false
 /** This session's id in the office (the session id, which a reload of the mod keeps). */
@@ -428,12 +461,12 @@ async function lockPath($: EngineInterface): Promise<string> {
 /** The office server named in the lock file, when it is really there and really the office. */
 async function findOffice($: EngineInterface): Promise<Office | null> {
   try {
-    const lock = JSON.parse(await $.fs.read(await lockPath($))) as { port?: unknown; token?: unknown }
+    const lock = JSON.parse(await $.fs.read(await lockPath($))) as { port?: unknown; token?: unknown; pageKey?: unknown }
     if (typeof lock.port !== 'number' || typeof lock.token !== 'string') return null
     const res = await $.http.fetch(`http://127.0.0.1:${lock.port}/health`)
     const health = JSON.parse(res.text) as { office?: unknown; windows?: unknown }
     if (!res.ok || health.office !== 'claude-studio') return null
-    return { port: lock.port, token: lock.token, windows: Number(health.windows) || 0 }
+    return { port: lock.port, token: lock.token, pageKey: typeof lock.pageKey === 'string' ? lock.pageKey : '', windows: Number(health.windows) || 0 }
   } catch {
     return null
   }
@@ -444,11 +477,12 @@ async function startOffice($: EngineInterface): Promise<void> {
   const script = `${$.plugin.root}/office/server.mjs`
   const argv = /^[A-Za-z]:[\\/]/.test($.plugin.root)
     ? ['powershell', '-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath node -ArgumentList '"${script.replace(/'/g, "''")}"' -WindowStyle Hidden`]
-    : ['sh', '-c', 'nohup node "$0" >/dev/null 2>&1 &', script]
+    : // setsid puts the server in a session of its own, so it outlives the terminal and the session that started it
+      ['sh', '-c', 'if command -v setsid >/dev/null 2>&1; then setsid nohup node "$0" >/dev/null 2>&1 & else nohup node "$0" >/dev/null 2>&1 & fi', script]
   await $.process.run(argv, { timeoutMs: 20000 })
 }
 
-async function post($: EngineInterface, path: '/state' | '/leave' | '/window', body: string): Promise<{ status: number; text: string } | null> {
+async function post($: EngineInterface, path: OfficePath, body: string): Promise<{ status: number; text: string } | null> {
   const o = office
   if (!o) return null
   try {
@@ -471,7 +505,7 @@ async function post($: EngineInterface, path: '/state' | '/leave' | '/window', b
 async function sendToOffice($: EngineInterface, state: string): Promise<boolean> {
   if (!office || !officeId) return false
   const whole = state || published || JSON.stringify(await read($, info))
-  const res = await post($, '/state', `{"session":${JSON.stringify(officeId)},"name":${JSON.stringify(sessionName)},"state":${whole}}`)
+  const res = await post($, '/state', `{"session":${JSON.stringify(officeId)},"name":${JSON.stringify(sessionName)},"cwd":${JSON.stringify(sessionCwd)},"state":${whole}}`)
   if (res && res.status < 300) return true
   if (!res || res.status === 403) {
     // the office stopped (or another one took its place): join whichever is there now
@@ -503,6 +537,8 @@ async function placeOf($: EngineInterface): Promise<Place> {
 
 /** The session's folder: the office shows it on the session's lead, so two sessions can be told apart. */
 let sessionName = ''
+/** The session's whole working folder (the window offers it when you start a new session from there). */
+let sessionCwd = ''
 /** The one office window's title (the page sets it); the placing helper finds the window by it. */
 const windowTitle = () => TITLE
 
@@ -514,7 +550,8 @@ const windowTitle = () => TITLE
 async function openWindow($: EngineInterface, launch: boolean): Promise<string | null> {
   const s = office
   if (!s) return 'the studio server is not running'
-  const url = `http://127.0.0.1:${s.port}/`
+  // the page key rides after the #, which the browser keeps to itself: it lets the window ask things of the office
+  const url = `http://127.0.0.1:${s.port}/${s.pageKey ? `#key=${s.pageKey}` : ''}`
   if (/^[A-Za-z]:[\\/]/.test($.plugin.root)) {
     let browser = ''
     for (const path of APP_BROWSERS) {
@@ -547,12 +584,37 @@ async function openWindow($: EngineInterface, launch: boolean): Promise<string |
       .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: String(err) }))
     return ran.exitCode === 0 ? null : ran.stderr.trim().split('\n')[0] || 'the browser did not start'
   }
-  for (const argv of [['open', '-na', 'Google Chrome', '--args', `--app=${url}`], ['open', url], ['xdg-open', url]]) {
-    const ran = await $.process.run(argv, { timeoutMs: 15000 }).catch(() => undefined)
-    if (ran?.exitCode === 0) return null
+  if ((await platformOf($)) === 'mac') {
+    for (const argv of [['open', '-na', 'Google Chrome', '--args', `--app=${url}`], ['open', url]]) {
+      const ran = await $.process.run(argv, { timeoutMs: 15000 }).catch(() => undefined)
+      if (ran?.exitCode === 0) return null
+    }
+    return 'no browser could be started'
   }
-  return 'no browser could be started'
+  // Linux: bring the open window forward (i3, or any window manager wmctrl knows), else open an app window in the
+  // first Chromium-family browser there is (each in a session of its own, so it outlives this one), else the default
+  const ran = await $.process.run(['sh', '-c', LINUX_WINDOW, url, launch ? 'launch' : 'raise', windowTitle()], { timeoutMs: 15000 }).catch(() => undefined)
+  if (ran?.exitCode === 0) return null
+  return ran?.stderr.trim().split('\n')[0] || 'no browser could be started'
 }
+
+/**
+ * The Linux window script: $0 the address, $1 'launch' or 'raise', $2 the window's title. Raising tries i3 and wmctrl
+ * first and falls through to opening a window when neither finds it.
+ */
+const LINUX_WINDOW = [
+  'url="$0"; mode="$1"; title="$2"',
+  'bg() { if command -v setsid >/dev/null 2>&1; then setsid "$@" >/dev/null 2>&1 & else nohup "$@" >/dev/null 2>&1 & fi; }',
+  'if [ "$mode" = raise ]; then',
+  '  if command -v i3-msg >/dev/null 2>&1 && i3-msg "[title=\"^$title\"] focus" 2>/dev/null | grep -q \'"success":true\'; then exit 0; fi',
+  '  if command -v wmctrl >/dev/null 2>&1 && wmctrl -a "$title" 2>/dev/null; then exit 0; fi',
+  'fi',
+  'for b in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge microsoft-edge-stable brave-browser vivaldi; do',
+  '  if command -v "$b" >/dev/null 2>&1; then bg "$b" --new-window --app="$url"; exit 0; fi',
+  'done',
+  'if command -v xdg-open >/dev/null 2>&1; then bg xdg-open "$url"; exit 0; fi',
+  'echo "no browser found (install Chrome, Chromium, Edge or Brave)" >&2; exit 1',
+].join('\n')
 
 /** The terminal pane, for when the window cannot open or on `/office pane`. */
 async function openPane($: EngineInterface): Promise<string | null> {
@@ -588,6 +650,7 @@ async function joinOffice($: EngineInterface, open: boolean): Promise<void> {
     }
     office = found
     await sendToOffice($, '')
+    emit($, 'session-ready', {})
     if (open && found.windows === 0 && (await mayOpenWindow($))) {
       const problem = await openWindow($, true)
       if (problem) {
@@ -600,6 +663,84 @@ async function joinOffice($: EngineInterface, open: boolean): Promise<void> {
   }
 }
 
+// ------------------------------------------------------------------------------------------------ features
+
+/** Tells the features about a moment of this session (see hooks/features/kit.ts); one feature's trouble is not the session's. */
+function emit($: EngineInterface, signal: Signal, data: SignalData): void {
+  try {
+    signalYourTurn($, signal, data)
+  } catch {}
+  try {
+    signalWhiteboard($, signal, data)
+  } catch {}
+  try {
+    signalProgress($, signal, data)
+  } catch {}
+  try {
+    signalPaperwork($, signal, data)
+  } catch {}
+  try {
+    signalShiftReport($, signal, data)
+  } catch {}
+  try {
+    signalControl($, signal, data)
+  } catch {}
+}
+
+function featureExtras(): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const f of FEATURES) {
+    try {
+      const v = f.extras?.()
+      if (v !== undefined) out[f.name] = v
+    } catch {
+      // leave that feature's extras out this time
+    }
+  }
+  return out
+}
+
+/** Adds what the progress feature counted to the office's lifetime counts. */
+async function sendStats($: EngineInterface): Promise<void> {
+  if (!office) return
+  let add: Record<string, number> | null = null
+  try {
+    add = takeProgressStats()
+  } catch {
+    return
+  }
+  if (add && Object.keys(add).length) await post($, '/stat', JSON.stringify({ session: officeId, add }))
+}
+
+let polling = false
+
+/** Picks up what the window asked this session to do (a prompt, a new agent) and does it. */
+async function pollInbox($: EngineInterface): Promise<void> {
+  if (!office || polling) return
+  polling = true
+  try {
+    const res = await post($, '/inbox', JSON.stringify({ session: officeId }))
+    if (!res || res.status !== 200) return
+    const { commands } = JSON.parse(res.text) as { commands?: InboxCommand[] }
+    for (const command of commands ?? []) {
+      try {
+        if (command.kind === 'prompt' || command.kind === 'agent') await runControlCommand($, command as Command)
+        else {
+          // a command a server feature queued (a persona to write...): its answer goes back to the server
+          const reply = await runCharactersCommand($, command)
+          if (reply !== undefined) await post($, '/reply', JSON.stringify({ session: officeId, id: command.id, kind: command.kind, reply }))
+        }
+      } catch (err) {
+        $.ui.log(`Claude's studio could not do what the window asked: ${String(err)}`, { to: 'debug' })
+      }
+    }
+  } catch {
+    // try again at the next poll
+  } finally {
+    polling = false
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -608,6 +749,8 @@ export const register: Register = on => {
         "Open Claude's studio window: `/office right` for the right half of the screen, `/office corner` for the top-right quarter, `/office day`, `/office night` or `/office auto` for the sky, `/office pane` for the small terminal version",
     })
     sessionName = e.cwd.split(/[\\/]/).filter(Boolean).pop() ?? ''
+    sessionCwd = e.cwd
+    emit($, 'session-start', { cwd: e.cwd })
     officeId = (await $.session.id().catch(() => '')) || officeId || `s${Math.random().toString(36).slice(2, 12)}`
     const storedSky = await $.store.get(SKY_KEY).catch(() => undefined)
     if (storedSky === 'day' || storedSky === 'night' || storedSky === 'auto') sky = storedSky
@@ -617,6 +760,9 @@ export const register: Register = on => {
     $.clock.every(5000, () => void readUsage($))
     // a heartbeat, so the office knows this session is still here (it lets a session go after 35 quiet seconds)
     $.clock.every(10000, () => void sendToOffice($, ''))
+    // the progress feature's counts, and what the window asks of this session (a prompt, a new agent)
+    $.clock.every(5000, () => void sendStats($))
+    $.clock.every(1500, () => void pollInbox($))
     // only where a person is at the prompt: a `claude -p` run or an SDK host joins no office
     interactive = e.isInteractive
     if (e.isInteractive) void joinOffice($, true)
@@ -661,6 +807,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', ($, e, next) => {
+    emit($, 'turn-start', e.agentId ? { agentId: e.agentId } : {})
     if (!e.agentId) {
       inTurn = true
       void publish($).catch(() => undefined)
@@ -669,6 +816,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', ($, e, next) => {
+    emit($, 'turn-complete', e.agentId ? { agentId: e.agentId } : {})
     if (!e.agentId) {
       inTurn = false
       calls.clear()
@@ -690,6 +838,7 @@ export const register: Register = on => {
       const h = helpers.get(agent)
       if (h) h.detail = call.detail
     } else calls.set(id, call)
+    emit($, 'tool-start', { tool: String(e.tool), toolUseId: id, input, ...(agent ? { agentId: agent } : {}) })
     // written before the tool runs, so the badges already say what it is doing
     await publish($).catch(() => undefined)
     let result: unknown
@@ -699,10 +848,25 @@ export const register: Register = on => {
     } finally {
       if (agent) helperCalls.get(agent)?.delete(id)
       else calls.delete(id)
-      noteResult(agent ?? MAIN, String(e.tool), input, result, await $.clock.now())
+      const who = agent ?? MAIN
+      emit($, 'tool-end', { tool: String(e.tool), toolUseId: id, input, result, ...(agent ? { agentId: agent } : {}) })
+      const outcome = noteResult(who, String(e.tool), input, result, await $.clock.now())
+      if (outcome === 'error') emit($, 'error', { who, tool: String(e.tool), strikes: streakOf(who).strikes })
+      if (outcome === 'fire-out') emit($, 'fire-out', { who })
+      if (outcome === 'test-passed') emit($, 'test-passed', { who })
+      const file = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
+      if (outcome && outcome !== 'error' && /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(String(e.tool)) && file) emit($, 'edit', { who, tool: String(e.tool), file })
       void publish($).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e)) // the studio only watches: whatever goes wrong here, the tool call goes on
+
+  // the feature modules add their own hooks after the core mod's (hooks/features/)
+  installYourTurn(on)
+  installWhiteboard(on)
+  installProgress(on)
+  installPaperwork(on)
+  installShiftReport(on)
+  installControl(on)
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const data = await read($, info)

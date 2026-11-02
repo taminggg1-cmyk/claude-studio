@@ -210,7 +210,7 @@ export function makeActor(id, rig) {
       this.blink -= dt
       const closed = this.blink > 0 ? 1 : m === 'celebrate' ? 0.15 : 0
 
-      props.cup.visible = this.sip > 0 && this.seated
+      props.cup.visible = (this.sip > 0 && this.seated) || (this.holding === 'cup' && !this.seated)
       props.pen.visible = this.seated && (this.activity === 'think' || this.mood === 'thinking') && this.cheer <= 0 && this.mood !== 'stressed'
       props.pen.userData.spin.rotation.y = t * 9
       props.extinguisher.visible = this.holding === 'extinguisher'
@@ -267,15 +267,58 @@ export function makeActor(id, rig) {
         if (run) {
           handsOnHead()
           T.lean = 0.12
+        } else if (this.action === 'carry') {
+          // a box held out in front with both arms
+          T.aAx = T.aBx = -1.25
+          T.aAz = -0.12
+          T.aBz = 0.12
+          T.eA = T.eB = 0.7
+          T.hX = 0.08
         } else if (this.holding === 'extinguisher') {
           T.aBx = -0.35
           T.eB = 0.5
           T.aBz = -0.2
+        } else if (this.holding === 'cup') {
+          // a cup held in front, close to the chest
+          T.aBx = -0.6
+          T.eB = 1.6
+          T.aBz = 0.25
         }
         return bob
       }
 
       if (!this.seated) {
+        if (this.action === 'write') {
+          // writing on a board: one arm up at head height, scribbling, the other hand resting
+          T.aAx = -2.1 + Math.sin(k * 7) * 0.12
+          T.aAz = 0.1 + Math.sin(k * 9) * 0.1
+          T.eA = 0.55 + Math.sin(k * 7) * 0.15
+          T.aBx = -0.2
+          T.eB = 0.5
+          T.hX = -0.12
+          T.hY = Math.sin(k * 1.5) * 0.12
+          return Math.sin(k * 7) * 0.004
+        }
+        if (this.action === 'carry') {
+          // standing with a box held out in front (feeding the shredder)
+          T.aAx = T.aBx = -1.25 + Math.sin(k * 5) * 0.05
+          T.aAz = -0.12
+          T.aBz = 0.12
+          T.eA = T.eB = 0.7
+          T.hX = 0.25
+          return Math.sin(k * 5) * 0.004
+        }
+        if (this.action === 'stretch') {
+          // both arms reaching up, leaning back a little, a slow sway
+          T.aAx = T.aBx = -3.0
+          T.aAz = 0.28
+          T.aBz = -0.28
+          T.eA = T.eB = 0.12
+          T.lean = -0.14
+          T.hX = -0.3
+          T.hZ = Math.sin(k * 2) * 0.06
+          return Math.sin(k * 2.4) * 0.008
+        }
         if (this.action === 'spray') {
           // aiming the extinguisher at the fire with both hands, braced
           T.aBx = -1.05
@@ -296,9 +339,32 @@ export function makeActor(id, rig) {
           handsOnHead()
           return Math.abs(Math.sin(k * 10)) * 0.04
         }
+        if (this.action === 'wave') {
+          // one arm raised and swinging side to side, the other hanging: a wave at the camera
+          const swing = Math.sin(k * 9)
+          T.aAx = -2.55
+          T.aAz = 0.35 + swing * 0.3
+          T.eA = 0.7 + swing * 0.25
+          T.aBz = -0.1
+          T.eB = 0.1
+          T.hY = Math.sin(k * 1.5) * 0.1
+          T.hZ = 0.06
+          return Math.sin(k * 2) * 0.006
+        }
         if (cheering) {
           armsUp()
           return Math.abs(Math.sin(k * 6.5)) * 0.06
+        }
+        if (this.holding === 'cup' && this.mood !== 'stressed') {
+          // standing with a coffee: the cup is held up, and every so often comes up for a sip
+          const sipping = k % 8 < 1.8
+          T.aBx = sipping ? -0.75 : -0.6
+          T.eB = sipping ? 2.35 : 1.6
+          T.aBz = 0.25
+          T.aAz = 0.1 + Math.sin(k * 1.2) * 0.02
+          T.hX = sipping ? -0.18 : 0
+          T.hY = sipping ? 0 : Math.sin(k * 0.5) * 0.35
+          return Math.sin(k * 2) * 0.006
         }
         if (this.mood === 'stressed') {
           // shoulders dropped, head hanging, arms dangling
