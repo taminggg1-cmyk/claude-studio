@@ -91,6 +91,9 @@ const CSS = `
 #ctl-panel .chr-roles, #ctl-panel .chr-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 #ctl-panel .chr-card .btn { padding: 4px 10px; font-size: 11.5px; }
 #ctl-panel .chr-card .btn.on { background: color-mix(in srgb, #c8775a 40%, transparent); color: var(--ink); }
+#ctl-panel .chr-size { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+#ctl-panel .chr-size input[type=range] { flex: 1; min-width: 0; }
+#ctl-panel .chr-size .pct { width: 40px; text-align: right; font-size: 11.5px; color: var(--ink); }
 #ctl-panel .chr-edit { margin-top: 6px; }
 #ctl-panel .chr-edit input[type=color] { width: 44px; height: 28px; padding: 0; border: 0; background: none; }
 `
@@ -193,6 +196,8 @@ export function makeCharacters(ctx) {
   let signature = ''
   let editing = null
   let writingBefore = new Set()
+  /** When this window last moved a size slider, by file: a snapshot that is older than that must not undo it. */
+  const localAt = new Map()
 
   const say = text => (status.textContent = text)
   const changed = () => reload.classList.add('show')
@@ -316,6 +321,37 @@ export function makeCharacters(ctx) {
     )
   }
 
+  /** A size slider for one character: shows live in the window at once, and is saved when the person lets go. */
+  function sizeRow(c) {
+    const now = () => ctx.size?.chars?.[c.file] ?? c.scale ?? 1
+    const bar = h('input', { type: 'range', min: '0.7', max: '2', step: '0.01', value: String(now()), title: 'How big this character stands' })
+    const pct = h('span', { class: 'pct' }, `${Math.round(now() * 100)}%`)
+    const set = value => {
+      bar.value = String(value)
+      pct.textContent = `${Math.round(value * 100)}%`
+      if (ctx.size) ctx.size.chars[c.file] = value
+      localAt.set(c.file, Date.now())
+    }
+    const save = async value => {
+      if (!canSend) return
+      try {
+        await ask('/characters/scale', { file: c.file, scale: value })
+        say(`${c.name} is now ${Math.round(value * 100)}% size.`)
+      } catch (err) {
+        // the office did not keep it: go back to the saved size now, and say so, rather than quietly a moment later
+        localAt.delete(c.file)
+        const saved = Number.isFinite(c.scale) ? c.scale : 1
+        set(saved)
+        localAt.delete(c.file)
+        say(`Not saved (${err.message || err}), so ${c.name} went back to ${Math.round(saved * 100)}%. Type /office in Claude Code if this keeps happening.`)
+      }
+    }
+    bar.addEventListener('input', () => set(Number(bar.value)))
+    bar.addEventListener('change', () => save(Number(bar.value)))
+    const reset = h('button', { type: 'button', class: 'btn plain', title: 'Back to the normal size', onclick: () => (set(1), save(1)) }, 'Reset')
+    return h('div', { class: 'chr-size' }, h('span', { class: 'chr-small' }, 'Size'), bar, pct, reset)
+  }
+
   function card(c) {
     const removeBtn = h('button', { type: 'button', class: 'btn plain', disabled: !canSend }, 'Remove')
     let sure = false
@@ -332,6 +368,7 @@ export function makeCharacters(ctx) {
       { class: 'chr-card' },
       h('div', { class: 'chr-head' }, h('span', { class: 'chr-dot', style: `background:${/^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#c8775a'}` }), h('span', { class: 'chr-name' }, c.name), h('span', { class: 'chr-file' }, c.file)),
       c.about ? h('p', { class: 'chr-about' }, c.about) : null,
+      sizeRow(c),
       c.writing ? h('p', { class: 'chr-small' }, 'Claude is writing a persona…') : c.note ? h('p', { class: 'chr-warn' }, c.note) : null,
       h(
         'div',
@@ -375,6 +412,7 @@ export function makeCharacters(ctx) {
     // do not rebuild the list while a field in it has the focus
     const focus = document.activeElement
     if (editing && focus && list.contains(focus) && /^(INPUT|TEXTAREA)$/.test(focus.tagName)) return
+    if (focus && list.contains(focus) && focus.type === 'range') return
     signature = sig
     const writing = new Set(rows.filter(r => r.writing).map(r => r.file))
     for (const f of writingBefore) if (!writing.has(f)) changed()
@@ -390,6 +428,13 @@ export function makeCharacters(ctx) {
   return {
     apply(snapshot) {
       if (!demo) data = snapshot?.characters || data
+      // everyone wearing a model takes its saved size, live (not while this window is moving that slider)
+      if (ctx.size)
+        for (const r of data.list || []) {
+          if (Date.now() - (localAt.get(r.file) || 0) < 4000) continue
+          const s = Number.isFinite(r.scale) ? r.scale : 1
+          if (ctx.size.chars[r.file] !== s && !(s === 1 && ctx.size.chars[r.file] === undefined)) ctx.size.chars[r.file] = s
+        }
       try {
         render()
       } catch (err) {

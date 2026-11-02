@@ -20,7 +20,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Mood, SkyMode, StudioInfo, Usage, Worker, WorkerCode } from '../types'
 import type { Code as SceneCode, SceneProps } from './studio'
 import { FEATURES } from './features'
-import { installControl, runControlCommand, signalControl } from './features/control'
+import { characterFor, installControl, runControlCommand, signalControl } from './features/control'
 import type { Command } from './features/control'
 import type { OfficePath, Signal, SignalData } from './features/kit'
 import { installPaperwork, signalPaperwork } from './features/paperwork'
@@ -332,6 +332,7 @@ async function publish($: EngineInterface): Promise<void> {
         color: h.color,
         mood: h.doneAt ? 'calm' : moodOf(code, theirs.strikes),
         ...theirs,
+        ...(characterFor(id, h.task) ? { model: characterFor(id, h.task) } : {}),
       }
     }),
     usage,

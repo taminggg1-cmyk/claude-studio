@@ -20,6 +20,12 @@ export async function loadModelConfig() {
     const agents = Array.isArray(config.agents) ? config.agents : []
     // each model's persona (name tag, colour, about, speech lines), keyed by its file
     const personas = {}
+    // each model's own size (0.7 to 2), keyed by its file
+    const scales = {}
+    for (const e of [config.claude, ...agents]) {
+      const s = typeof e === 'object' ? Number(e?.scale) : NaN
+      if (file(e) && Number.isFinite(s)) scales[file(e)] = Math.max(0.7, Math.min(2, s))
+    }
     for (const e of [config.claude, ...agents]) if (file(e) && e?.persona && typeof e.persona === 'object') personas[file(e)] = e.persona
     return {
       claude: file(config.claude) || null,
@@ -27,6 +33,7 @@ export async function loadModelConfig() {
       poster: file(config.poster) || null,
       credits: [config.claude, ...agents].map(e => e?.credit).filter(Boolean),
       personas,
+      scales,
     }
   } catch {
     return null
@@ -120,7 +127,9 @@ export async function vrmRig(file, id) {
   const headY = at('head')?.y ?? (box.max.y - box.min.y) * 0.85
   const scale = Math.max(0.5, Math.min(1.3, HEAD_HEIGHT / Math.max(0.2, headY)))
   model.scale.setScalar(scale)
-  const drop = Math.max(0, hip * scale - SEATED_HIP)
+  /** How far the hips sink to reach the seat. The person is also scaled around the feet (rig.size), so the seat's height is divided by it. */
+  const dropFor = size => Math.max(0, hip * scale - SEATED_HIP / size)
+  const drop = dropFor(1)
   const headBone = bone('head')
   const height = (box.max.y - box.min.y) * scale
 
@@ -159,6 +168,8 @@ export async function vrmRig(file, id) {
   return {
     object,
     kind: 'vrm',
+    /** The extra size from the room and the character settings; the page sets it every frame, and root.scale applies it. */
+    size: 1,
     info: `s${scale.toFixed(2)} knee${knee.toFixed(2)} hip${hip.toFixed(2)} drop${drop.toFixed(2)} h${height.toFixed(2)} v${vrm?.meta?.metaVersion}`,
     hand: side => hands[side],
     anchor(out) {
@@ -176,7 +187,8 @@ export async function vrmRig(file, id) {
       settled = false
     },
     apply(J, bob, dt, face, closed) {
-      offset.position.y = -J.drop * drop + bob
+      const size = this.size || 1
+      offset.position.y = -J.drop * dropFor(size) + bob
       if (!vrm) return
       setBone('spine', J.lean * 0.45, J.twist * 0.5, 0)
       setBone('chest', J.lean * 0.35, J.twist * 0.5, 0)
@@ -190,7 +202,7 @@ export async function vrmRig(file, id) {
       setBone('leftUpperLeg', J.tL, 0, 0)
       setBone('rightUpperLeg', J.tR, 0, 0)
       // longer legs than the chair is high: seated knees tuck a little further back
-      const tuck = Math.max(0, knee * scale - SEATED_HIP) * 2.2 * J.drop
+      const tuck = Math.max(0, knee * scale - SEATED_HIP / size) * 2.2 * J.drop
       setBone('leftLowerLeg', J.kL + tuck, 0, 0)
       setBone('rightLowerLeg', J.kR + tuck, 0, 0)
       setBone('leftFoot', -Math.min(0.5, Math.max(0, J.kL - 1.2)) * 0.4, 0, 0)

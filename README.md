@@ -3,6 +3,20 @@
 A cosy office for Claude Code. When you start Claude Code, a window opens next to the terminal. It shows a small
 office loft from above at an angle, like a building in a tycoon game. Claude works at her desk in this office.
 
+![Three Claude Code sessions sharing one office, with agents at their desks and name tags above everyone](docs/images/hero.png)
+
+## Screenshots
+
+All pictures come from the built-in demo pages (see *How it works*), so nothing in them is real work.
+
+<table>
+<tr><td width="50%"><img src="docs/images/agents-arrive.gif" alt="Agents walking in through the door, being briefed and sitting down at their desks"><br><sub>Agents walk in, get their task from Claude and sit down.</sub></td><td width="50%"><img src="docs/images/moods.jpg" alt="A line-up of the four built-in characters, each with a name tag and a mood"><br><sub>Every person shows a mood, and chats now and then.</sub></td></tr>
+<tr><td width="50%"><img src="docs/images/fire.png" alt="A desk on fire while Claude sprays it with a fire extinguisher"><br><sub>A run of errors sets a desk on fire. Claude fetches the extinguisher.</sub></td><td width="50%"><img src="docs/images/interact.png" alt="The office with hint labels on everything you can click"><br><sub>Hover hints show what you can click: the cat, the plants, the coffee machine and more.</sub></td></tr>
+<tr><td width="50%"><img src="docs/images/theme-neon-night.png" alt="The office at night in the Night neon theme, with a city skyline in the windows"><br><sub>Night neon theme, with the night sky outside.</sub></td><td width="50%"><img src="docs/images/theme-cabin.png" alt="The office in the warm Forest cabin theme"><br><sub>Forest cabin theme. There are eight themes in all.</sub></td></tr>
+<tr><td width="50%"><img src="docs/images/weather-storm.png" alt="Rain running down the office windows during a storm at night"><br><sub>Weather: a storm at night. The room can follow your real forecast.</sub></td><td width="50%"><img src="docs/images/weather-snow.png" alt="Snow falling outside the office windows"><br><sub>Weather: snow outside the windows.</sub></td></tr>
+<tr><td width="50%"><img src="docs/images/design-panel.png" alt="The Ask the office panel open on the Design tab, with themes and colour pickers"><br><sub>The Design tab: themes, colours, floors, sofas and lamps.</sub></td><td width="50%"><img src="docs/images/shift-report.png" alt="A shift report card at the bottom left of the office"><br><sub>A shift report card when a session ends.</sub></td></tr>
+</table>
+
 ## What you see
 
 - **Claude** sits at her desk. She types, reads, scratches her chin while she thinks, and sometimes drinks from her
@@ -89,6 +103,10 @@ office loft from above at an angle, like a building in a tycoon game. Claude wor
   name, colour, a short text and speech lines. You can make any character Claude's own, an agent, or switch it off
   (`unused` in models.json), edit or rewrite its persona, or remove it (the file moves to a `removed` folder). Reload
   the window to see the change.
+- **Sizes.** Characters can be made bigger or smaller: each one with its own size slider on the *Characters* tab, and
+  everyone at once with *People's size* on the *Design* tab (70% to 200%; the two multiply). The change shows at once.
+- **Pick who comes in.** The *Add an agent* tab has a *Character* list: the new agent walks in wearing the character you
+  picked (or any free one).
 - **The token rack.** A walnut server rack against the back wall has two LED strips. The left one (*ctx*) fills with how
   much of the context window is used. The right one (*5h*) fills with how much of your five-hour usage limit is used.
   They are green under 50 %, amber from 50 % to 80 %, and glowing hot pink from 80 %. The neon *tokens* sign above
