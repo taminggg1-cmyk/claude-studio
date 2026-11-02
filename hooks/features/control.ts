@@ -21,7 +21,27 @@ export function signalControl($: EngineInterface, signal: Signal, data: SignalDa
 }
 
 /** One thing the window asked this session to do (see office/server.mjs, POST /command). */
-export type Command = { id: string; kind: 'prompt' | 'agent'; text: string; agentType?: string; at: number }
+export type Command = { id: string; kind: 'prompt' | 'agent'; text: string; agentType?: string; character?: string; at: number }
+
+/** The character each agent started from the window should wear (agent id to model file), as picked in the panel. */
+const wearing = new Map<string, string>()
+/** Picks whose agent id is not known yet (the spawn did not say it), by the agent's description, for two minutes. */
+const pending = new Map<string, { file: string; at: number }>()
+
+/**
+ * The character picked for this agent in the window's panel, if any. An agent whose id the spawn did not report is
+ * matched once by its description (what $.agent.list shows as the agent's description).
+ */
+export function characterFor(agentId: string, description?: string): string | undefined {
+  const known = wearing.get(agentId)
+  if (known) return known
+  const p = description ? pending.get(description) : undefined
+  if (!p || !description) return undefined
+  pending.delete(description)
+  if (Date.now() - p.at > 120_000) return undefined
+  wearing.set(agentId, p.file)
+  return p.file
+}
 
 /** Asks the window for nothing older than this: a command that waited longer (the session was busy elsewhere) is dropped. */
 const STALE_MS = 10 * 60_000
@@ -37,7 +57,11 @@ export async function runControlCommand($: EngineInterface, command: Command): P
   }
   if (command.kind === 'agent') {
     const description = text.length > 48 ? `${text.slice(0, 45).trimEnd()}…` : text
-    await $.agent.spawn({ prompt: text, description, ...(command.agentType ? { subagentType: command.agentType } : {}) })
+    const started = await $.agent.spawn({ prompt: text, description, ...(command.agentType ? { subagentType: command.agentType } : {}) })
+    const character = typeof command.character === 'string' && /^[\w.-]{1,120}\.(vrm|glb)$/i.test(command.character) ? command.character : ''
+    if (character && started.agentId) wearing.set(started.agentId, character)
+    else if (character) pending.set(description, { file: character, at: Date.now() })
+    if (wearing.size > 50) wearing.delete(wearing.keys().next().value as string)
     $.ui.toast(`Claude's studio started an agent: ${description}`)
   }
 }

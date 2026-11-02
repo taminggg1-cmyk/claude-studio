@@ -39,6 +39,8 @@ export type Worker = {
   strikes: number
   /** Goes up by one for every success worth a cheer (a passing test, a run of errors ended, an agent done). */
   cheer: number
+  /** The character model (a file in models.json) the window should dress this agent in: the one picked in the panel. */
+  model?: string
 }
 
 /** Usage readings for the token rack, as percentages; null where Claude Code has no reading. */

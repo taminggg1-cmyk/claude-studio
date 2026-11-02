@@ -13,6 +13,8 @@ const AGENT_TYPES = ['general-purpose', 'Explore', 'Plan']
 export function makeControl(ctx) {
   let sessions = []
   let folders = []
+  /** The characters the server lists (name, role), by model file; the page can dress agents only in models it loaded. */
+  let listed = new Map()
 
   const askPage = addTab('ask', 'Ask Claude', () => refreshLists())
   askPage.innerHTML = `
@@ -23,6 +25,7 @@ export function makeControl(ctx) {
   agentPage.innerHTML = `
     <label>Session</label><select class="session"></select>
     <label>Kind of agent</label><select class="kind">${AGENT_TYPES.map(t => `<option>${t}</option>`).join('')}</select>
+    <label>Character</label><select class="character"></select>
     <label>Its task</label><textarea class="text" placeholder="What should the agent find out or do?"></textarea>
     <div class="row"><span class="note"></span><button type="button" class="send">Start</button></div>`
   const newPage = addTab('new', 'New session')
@@ -50,7 +53,27 @@ export function makeControl(ctx) {
     for (const entry of ctx.people.values()) if (entry.isLead && entry.info.session === s.id) return entry.persona?.name || 'Claude'
     return 'Claude'
   }
+  /** The characters an agent can wear: every model this page loaded (Claude's own included), named by its persona. */
+  function refreshCharacters() {
+    const select = agentPage.querySelector('select.character')
+    const was = select.value
+    select.innerHTML = '<option value="">Any free character</option>'
+    const models = ctx.models
+    if (!models) return
+    const worn = new Set([...ctx.people.values()].filter(e => e.state !== 'leaving').map(e => e.model))
+    for (const file of [...new Set([...models.agents, models.claude].filter(Boolean))]) {
+      if (listed.get(file)?.role === 'off') continue
+      const opt = document.createElement('option')
+      opt.value = file
+      const name = models.personas?.[file]?.name || listed.get(file)?.name || file.replace(/\.(vrm|glb)$/i, '')
+      opt.textContent = `${name}${file === models.claude ? " (Claude's own)" : ''}${worn.has(file) ? ' · in the room' : ''}`
+      select.append(opt)
+    }
+    if ([...select.options].some(o => o.value === was)) select.value = was
+  }
+
   function refreshLists() {
+    refreshCharacters()
     const pick = chosen()
     for (const select of [askPage, agentPage].map(p => p.querySelector('select.session'))) {
       const was = select.value
@@ -119,9 +142,11 @@ export function makeControl(ctx) {
     const text = area.value.trim()
     if (!text) throw new Error('write the task first')
     const agentType = page.querySelector('select.kind').value
-    await ask('/command', { session: s.id, kind: 'agent', text, agentType })
+    const character = page.querySelector('select.character').value
+    await ask('/command', { session: s.id, kind: 'agent', text, agentType, ...(character ? { character } : {}) })
     area.value = ''
-    return `${leadName(s)} is calling in a ${agentType} agent. Watch the door.`
+    const who = character ? page.querySelector('select.character').selectedOptions[0]?.textContent.split(' (')[0].split(' · ')[0] : ''
+    return `${leadName(s)} is calling in a ${agentType} agent${who ? `: ${who} is on the way` : ''}. Watch the door.`
   })
   wire(newPage, async page => {
     const typed = page.querySelector('input.path').value.trim()
@@ -138,6 +163,8 @@ export function makeControl(ctx) {
   return {
     apply(snapshot, list) {
       sessions = list || []
+      if (Array.isArray(snapshot?.characters?.list || snapshot?.characters))
+        listed = new Map((snapshot.characters.list || snapshot.characters).filter(c => c && c.file).map(c => [c.file, c]))
       const known = new Set()
       folders = []
       for (const f of [...sessions.map(s => s.cwd), ...(snapshot?.stats?.folders || [])])

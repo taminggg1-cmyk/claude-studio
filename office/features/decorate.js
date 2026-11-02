@@ -6,7 +6,7 @@
 // The room itself restyles through world.design (room.js). `?design=<theme id>` shows a theme on a demo page.
 
 import { addTab, ask, canSend, cannotSendWhy, isBusy } from '../panel.js'
-import { COLOR_KEYS, DEFAULT_DESIGN, FLOORS, THEMES, VARIANTS, checkDesign, themeDesign } from '../design.js'
+import { COLOR_KEYS, DEFAULT_DESIGN, FLOORS, PEOPLE_SIZE, THEMES, VARIANTS, checkDesign, themeDesign } from '../design.js'
 
 const CSS = `
 .dz-themes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 4px 0 8px; }
@@ -48,6 +48,7 @@ export function makeDecorate(ctx) {
   const forced = new URLSearchParams(location.search).get('design')
 
   const show = () => {
+    if (ctx.size) ctx.size.people = draft.people ?? 1
     const why = world.design.apply(draft)
     if (why) note(why)
   }
@@ -114,6 +115,15 @@ export function makeDecorate(ctx) {
   const warmth = el('input', { type: 'range', min: '0', max: '1', step: '0.01', className: 'dz-range' })
   warmth.addEventListener('input', () => {
     draft.light = Number(warmth.value)
+    show()
+  })
+
+  const peopleBar = el('input', { type: 'range', min: String(PEOPLE_SIZE.min), max: String(PEOPLE_SIZE.max), step: '0.01', className: 'dz-range' })
+  const peopleValue = el('span', { textContent: '100%' })
+  const showPeople = () => (peopleValue.textContent = `${Math.round((draft.people ?? 1) * 100)}%`)
+  peopleBar.addEventListener('input', () => {
+    draft.people = Number(peopleBar.value)
+    showPeople()
     show()
   })
 
@@ -184,6 +194,8 @@ export function makeDecorate(ctx) {
     posterRow,
     el('div', { className: 'dz-head', textContent: 'Lamp light (cool to warm)' }),
     warmth,
+    el('div', { className: 'dz-head' }, "People's size ", peopleValue),
+    peopleBar,
     el('div', { className: 'row' }, saveButton, resetButton, exportButton, importButton, importer),
     el('div', { className: 'row' }, status),
   )
@@ -197,6 +209,8 @@ export function makeDecorate(ctx) {
     for (const s of slotSels) s.sync()
     poster.checked = draft.variants.poster
     warmth.value = String(draft.light)
+    peopleBar.value = String(draft.people ?? 1)
+    showPeople()
   }
   sync()
 
@@ -216,10 +230,17 @@ export function makeDecorate(ctx) {
       sync()
     }
   }
+  // ?size=<0.7..2> sets the people's size on a demo page
+  const forcedSize = Number(new URLSearchParams(location.search).get('size'))
+  if (ctx.isDemo && forcedSize >= PEOPLE_SIZE.min && forcedSize <= PEOPLE_SIZE.max) {
+    draft.people = forcedSize
+    show()
+    sync()
+  }
 
   return {
     apply(snapshot) {
-      if (forced && ctx.isDemo) return // a demo page shows the theme it was asked for
+      if ((forced || forcedSize) && ctx.isDemo) return // a demo page shows the theme it was asked for
       if (!snapshot || !('room' in snapshot)) return
       const key = JSON.stringify(snapshot.room)
       if (key === serverKey && !hasWaiting) return

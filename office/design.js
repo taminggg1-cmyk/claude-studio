@@ -8,6 +8,7 @@
 //     floor: 'mixed' | 'oak' | 'concrete' | 'carpet' | 'tiles',
 //     variants: { sofa: 'curved' | 'straight' | 'none', rug: 'woven' | 'plain' | 'none',
 //                 plants: 'none' | 'some' | 'lush', lamps: 'all' | 'pendants' | 'floor' | 'none', poster: true | false },
+//     people: 0.7..2,                                 // how big everyone is (1 as built; a design saved before this had none)
 //     light: 0..1 }                                   // lamp warmth: 0 cool white, 0.5 as the loft is, 1 deep amber
 
 /** The colours a person may change, with the words the Design tab shows. */
@@ -57,7 +58,7 @@ export const VARIANTS = {
   ],
 }
 
-const design = (theme, colors, floor, variants, light) => ({ theme, colors, floor, variants, light })
+const design = (theme, colors, floor, variants, light) => ({ theme, colors, floor, variants, light, people: 1 })
 const V = (o = {}) => ({ sofa: 'curved', rug: 'woven', plants: 'lush', lamps: 'all', poster: true, ...o })
 
 /** The theme presets. The first, 'loft', is the room as it has always looked. */
@@ -159,7 +160,8 @@ const clone = d => JSON.parse(JSON.stringify(d))
 export const themeDesign = id => clone((THEMES.find(t => t.id === id) || THEMES[0]).design)
 
 const HEX = /^#[0-9a-f]{6}$/
-const TOP = ['theme', 'colors', 'floor', 'variants', 'light']
+const TOP = ['theme', 'colors', 'floor', 'variants', 'light', 'people']
+export const PEOPLE_SIZE = { min: 0.7, max: 2 }
 
 /**
  * Checks a design strictly: known keys only, colours '#rrggbb', styles from the fixed lists, a known theme id, light a
@@ -202,6 +204,11 @@ export function checkDesign(input) {
   if (input.light !== undefined) {
     if (typeof input.light !== 'number' || !Number.isFinite(input.light) || input.light < 0 || input.light > 1) return bad('"light" must be a number from 0 to 1.')
     out.light = Math.round(input.light * 100) / 100
+  }
+  if (input.people !== undefined) {
+    const n = input.people
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < PEOPLE_SIZE.min || n > PEOPLE_SIZE.max) return bad('"people" must be a number from 0.7 to 2.')
+    out.people = Math.round(n * 100) / 100
   }
   return { ok: true, design: out }
 }

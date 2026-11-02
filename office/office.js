@@ -36,6 +36,8 @@ const rand = (a, b) => a + Math.random() * (b - a)
 const STILL = params.has('still') ? Number(params.get('still')) || 0 : -1
 const MODELS = params.get('models') === '0' ? null : await loadModelConfig()
 if (MODELS) prefetchModels(MODELS)
+/** How big people are: `people` is the room's setting (Design tab), `chars` the per-model sizes by file name (Characters tab). */
+const SIZE = { people: 1, chars: { ...(MODELS?.scales ?? {}) } }
 
 // ------------------------------------------------------------------------------------------------ renderer, scene
 
@@ -427,7 +429,9 @@ function modelFor(isLead) {
 function spawn(id, info, instant) {
   const isLead = !!info.isLead || id === 'claude'
   const firstLead = isLead && ![...people.values()].some(e => e.isLead && e.state !== 'leaving')
-  const model = modelFor(isLead)
+  // an agent started from the panel may come with the character picked for it (when that model is in models.json)
+  const picked = !isLead && MODELS && typeof info.model === 'string' && (info.model === MODELS.claude || MODELS.agents.includes(info.model)) ? info.model : null
+  const model = picked ?? modelFor(isLead)
   // the built-in figure (shown until a model loads, or when there are none): Claude's own look for the main lead
   const wearsClaude = isLead && (MODELS?.claude ? model === MODELS.claude : firstLead)
   const taken = new Set([...people.values()].map(e => e.lookIndex))
@@ -951,8 +955,12 @@ const features = makeFeatures({
   faceYaw,
   /** Whether this page plays a made-up session (?demo, ?sessions, ?still, ?lineup) rather than the live office. */
   isDemo: DEMO || STILL >= 0 || params.has('sessions'),
+  /** The character models this page loaded ({ claude, agents, personas }), or null with none. */
+  models: MODELS,
   /** Lighting a feature may scale (weather): { sun, sky }, 1 = as the clock says. */
   env,
+  /** How big people are: { people, chars } (see SIZE). Features may change these numbers; the people ease to them. */
+  size: SIZE,
   /** The sessions of the last update. */
   sessions: () => lastSessions,
   /** The lead of a person's session (the person themself for a lead). */
@@ -1192,6 +1200,13 @@ function step(dt) {
   for (const entry of people.values()) {
     if (!entry.ready && performance.now() - entry.born > 6500) entry.ready = true
     entry.p.root.visible = entry.ready
+    // size: the room's setting times the model's own, eased over about half a second; the rig reads it to seat itself
+    // (the two multiply, kept between 50% and 250% so nobody vanishes or fills the room)
+    const want = Math.max(0.5, Math.min(2.5, SIZE.people * (entry.model ? (SIZE.chars[entry.model] ?? 1) : 1)))
+    entry.size = entry.size === undefined ? want : entry.size + (want - entry.size) * (1 - Math.exp(-dt * 7))
+    if (Math.abs(entry.size - want) < 0.002) entry.size = want
+    if (entry.p.root.scale.x !== entry.size) entry.p.root.scale.setScalar(entry.size)
+    entry.p.rig.size = entry.size
     entry.p.update(dt, t)
     moodEffects(entry, dt)
     chatter(entry, dt)

@@ -339,6 +339,8 @@ export function chibiRig(look, id) {
   return {
     object,
     kind: 'chibi',
+    /** The extra size from the room and the character settings; the page sets it every frame, and root.scale applies it. */
+    size: 1,
     hand: side => hands[side],
     anchor(out) {
       head.getWorldPosition(out)
@@ -350,7 +352,8 @@ export function chibiRig(look, id) {
     },
     apply(J, bob, dt, face, closed) {
       clock += dt
-      body.position.y = 0.52 - J.drop * 0.12 + bob
+      // seated, the body sits 0.40 above the floor whatever the size (the figure is scaled around its feet)
+      body.position.y = 0.52 - J.drop * (0.52 - 0.4 / (this.size || 1)) + bob
       torso.rotation.x = J.lean
       torso.rotation.y = J.twist
       L.leg.rotation.x = J.tL

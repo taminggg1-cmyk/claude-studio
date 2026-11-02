@@ -72,7 +72,7 @@ export type OfficePath = '/state' | '/leave' | '/window' | '/stat' | '/inbox' | 
  * (control.ts runs them); any other kind was queued by a server feature (office/server-features/) and goes to the mod
  * feature that answers it (characters.ts for 'persona'); its return value is posted back to the server (POST /reply).
  */
-export type InboxCommand = { id: string; kind: string; text: string; agentType?: string; data?: unknown; at: number }
+export type InboxCommand = { id: string; kind: string; text: string; agentType?: string; character?: string; data?: unknown; at: number }
 
 export type Feature = {
   name: string

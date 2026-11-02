@@ -312,8 +312,8 @@ export function makeWeather(ctx) {
   if (demoKind) {
     const [code, cloud, wind] = DEMO[demoKind]
     data = {
-      city: 'Bangkok',
-      country: 'Thailand',
+      city: 'Your city',
+      country: '',
       current: { code, temp: 27, cloud, precip: code >= 61 && code < 70 ? 3 : 0, wind, isDay: 1 },
       today: { code, max: 31, min: 24 },
       updated: Date.now(),

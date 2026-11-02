@@ -7,6 +7,7 @@
 //   POST /characters/role     {file, role: 'claude' | 'agent' | 'off'}
 //   POST /characters/persona  {file, persona: {name, color, about, lines?}}   a manual edit
 //   POST /characters/rewrite  {file}                                          ask Claude for a new persona
+//   POST /characters/scale    {file, scale: 0.7 to 2}                         how big the character stands (1 = as built)
 //   POST /characters/remove   {file}                                          moves the file to removed/, never deletes
 //
 // The list reaches the window as snapshot.characters. models.json keeps one backup (models.json.bak) before every change.
@@ -19,6 +20,7 @@ const MOMENTS = ['hello', 'flow', 'thinking', 'delegating', 'stressed', 'panic',
 const COLOURS = ['#e0457b', '#5b78c9', '#8e62b8', '#3f8f6f', '#b8634f', '#4f8fa8', '#a8763a', '#c8775a']
 const UPLOAD_LIMIT = 100 * 1024 * 1024
 const WRITING_MS = 3 * 60 * 1000
+export const SCALE = { min: 0.7, max: 2 }
 const RESERVED = new Set(['models', 'poster'])
 
 // ------------------------------------------------------------------------------------------------ the file
@@ -283,6 +285,7 @@ export default function setup(api) {
       about: clean(persona.about, 200),
       role,
       credit: clean(e.credit, 300),
+      scale: Number.isFinite(e.scale) ? Math.max(SCALE.min, Math.min(SCALE.max, e.scale)) : 1,
       licence: meta.error ? 'The licence could not be read from the file.' : `${meta.licence}${limits.length ? `: ${limits.join(', ')}` : ': no limits stated'}`,
       warning: limits.length ? `The licence limits how this model may be used (${limits.join(', ')}). Use it only in ways it allows.` : '',
       hasPersona,
@@ -481,6 +484,39 @@ export default function setup(api) {
     const note = askForPersona(file, meta, { rewrite: true, previous })
     api.share()
     api.json(res, 200, { ok: true, writing: pending.has(file), note })
+  })
+
+  api.route('POST', '/characters/scale', async (req, res, body) => {
+    const file = fileName(body)
+    const scale = body?.scale
+    if (!file) return fail(res, 400, 'Say which model.')
+    if (typeof scale !== 'number' || !Number.isFinite(scale) || scale < SCALE.min || scale > SCALE.max) return fail(res, 400, 'The size must be a number from 0.7 to 2.')
+    const value = Math.round(scale * 100) / 100
+    let found = false
+    await change(async config => {
+      let hit = await find(config, file)
+      if (!hit && /\.vrm$/i.test(file) && !(await metaOf(file)).error) {
+        // a model in the folder that models.json does not list yet: list it (switched off) so it can keep a size
+        config.unused = [...(Array.isArray(config.unused) ? config.unused : []), { file }]
+        hit = ['off', config.unused[config.unused.length - 1]]
+      }
+      if (!hit) return
+      found = true
+      let entry = hit[1]
+      if (typeof entry === 'string') {
+        // a bare file name becomes an entry so it can carry a size
+        entry = { file: entry }
+        if (hit[0] === 'claude') config.claude = entry
+        else {
+          const list = hit[0] === 'agent' ? config.agents : config.unused
+          list[list.indexOf(hit[1])] = entry
+        }
+      }
+      if (value === 1) delete entry.scale
+      else entry.scale = value
+    })
+    if (!found) return fail(res, 404, 'That model is not listed in models.json.')
+    api.json(res, 200, { ok: true, scale: value })
   })
 
   api.route('POST', '/characters/remove', async (req, res, body) => {

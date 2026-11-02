@@ -479,9 +479,11 @@ const server = createServer((req, res) => {
       const text = typeof data.text === 'string' ? data.text.trim().slice(0, 8000) : ''
       if (!sessions.has(data.session) || !['prompt', 'agent'].includes(kind) || !text) return send(res, 400, 'bad command')
       const agentType = typeof data.agentType === 'string' && /^[\w:.-]{1,64}$/.test(data.agentType) ? data.agentType : undefined
+      // the character the new agent should wear (a model file name from models.json), picked in the panel
+      const character = kind === 'agent' && typeof data.character === 'string' && /^[\w.-]{1,120}\.(vrm|glb)$/i.test(data.character) ? data.character : undefined
       const list = inboxes.get(data.session) ?? []
       if (list.length >= 20) return send(res, 429, 'too many waiting')
-      list.push({ id: randomBytes(6).toString('hex'), kind, text, ...(agentType ? { agentType } : {}), at: Date.now() })
+      list.push({ id: randomBytes(6).toString('hex'), kind, text, ...(agentType ? { agentType } : {}), ...(character ? { character } : {}), at: Date.now() })
       inboxes.set(data.session, list)
       send(res, 202, '')
     })

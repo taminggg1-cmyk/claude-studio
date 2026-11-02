@@ -9,11 +9,13 @@ function officeWithInbox(on: Parameters<TestBody>[1], inbox: unknown[]) {
   const runs: string[][] = []
   const prompts: string[] = []
   const spawns: { prompt: string; subagentType?: string; description?: string }[] = []
+  const agents: { id: string; type: string; description: string; status: 'running' }[] = []
+  const states: Record<string, any>[] = []
   mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
   on('command.register', () => ({ value: { command: 'office' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.toast', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: agents }))
   on('session.id', () => ({ value: 'session-one' }))
   on('fs.stat', (_, e) => (e.path.includes('msedge') ? { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } : { deny: 'ENOENT' }))
   on('fs.read', (_, e) =>
@@ -27,6 +29,7 @@ function officeWithInbox(on: Parameters<TestBody>[1], inbox: unknown[]) {
     const path = new URL(e.url).pathname
     if (path === '/health') return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ office: 'claude-studio', windows: 0 }) } }
     if (path === '/window') return { value: { status: 200, ok: true, headers: {}, text: '{"open":true}' } }
+    if (path === '/state') states.push(JSON.parse(String(e.init?.body ?? '{}')).state)
     if (path === '/inbox') {
       const commands = inbox.splice(0)
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ commands }) } }
@@ -41,13 +44,14 @@ function officeWithInbox(on: Parameters<TestBody>[1], inbox: unknown[]) {
     // the testing kit hands the hook the Agent tool's own input, where the kind is `subagent_type`
     const raw = e as unknown as { subagent_type?: string }
     spawns.push({ prompt: e.prompt, subagentType: e.subagentType ?? raw.subagent_type, description: e.description })
+    agents.push({ id: 'new-agent', type: e.subagentType ?? raw.subagent_type ?? 'general-purpose', description: e.description ?? e.prompt, status: 'running' })
     return { model: 'test-model', agentId: 'new-agent' }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
-  return { runs, prompts, spawns }
+  return { runs, prompts, spawns, states }
 }
 
 test('the window opens with its page key after the #, so only it can ask the office for things', async ($, on) => {
@@ -64,7 +68,7 @@ test('a prompt and an agent asked for in the window reach this session', async (
   const now = Date.now()
   const w = officeWithInbox(on, [
     { id: 'c1', kind: 'prompt', text: 'Summarise the README', at: now },
-    { id: 'c2', kind: 'agent', text: 'Find every TODO in src', agentType: 'Explore', at: now },
+    { id: 'c2', kind: 'agent', text: 'Find every TODO in src', agentType: 'Explore', character: 'akari.vrm', at: now },
   ])
   await $.session.start({ cwd: 'C:/work/my-app', surface: 'terminal', isInteractive: true })
   await clock.advance(4000)
@@ -74,6 +78,9 @@ test('a prompt and an agent asked for in the window reach this session', async (
   expect(w.spawns.length).toBe(1)
   expect(w.spawns[0]?.prompt).toBe('Find every TODO in src')
   expect(w.spawns[0]?.subagentType).toBe('Explore')
+  // the new agent walks in wearing the character picked for it in the window
+  const helper = w.states.filter(Boolean).pop()?.helpers?.find((h: { id: string }) => h.id === 'new-agent')
+  expect(helper?.model).toBe("akari.vrm")
   // each command runs once, not again at the next poll
   await clock.advance(4000)
   expect(w.prompts.length).toBe(1)
