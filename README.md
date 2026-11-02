@@ -247,6 +247,14 @@ made there shows up in the next session (or after `/reload-plugins`).
 
 ### On Linux
 
+One command installs it, and running it again updates it:
+
+```
+curl -fsSL https://raw.githubusercontent.com/taminggg1-cmyk/claude-studio/main/install.sh | sh
+```
+
+Or step by step:
+
 ```
 sudo apt install nodejs git            # or Node.js from nodejs.org / nvm; any recent version
 git clone https://github.com/taminggg1-cmyk/claude-studio ~/claude-studio
