@@ -9,9 +9,15 @@
 //   POST /characters/rewrite  {file}                                          ask Claude for a new persona
 //   POST /characters/scale    {file, scale: 0.7 to 2}                         how big the character stands (1 = as built)
 //   POST /characters/remove   {file}                                          moves the file to removed/, never deletes
+//   POST /characters/lounge   {file, on: true | false}                        whether an agent hangs out in the lounge
 //
 // The list reaches the window as snapshot.characters. models.json keeps one backup (models.json.bak) before every change.
 // Models switched off live in models.json's "unused" list, which the window's loader ignores.
+//
+// The lounge: agents who are not working sit in the lounge as off-duty friends (../features/lounge.js). models.json's
+// "lounge" is the list of the ones who do, by file. Until someone chooses (no "lounge" key), the first three agents do.
+// The list may name models that are not agents right now (switched off, or Claude's own): they are back in the lounge
+// when they are agents again.
 
 import { copyFile, mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
@@ -22,6 +28,8 @@ const UPLOAD_LIMIT = 100 * 1024 * 1024
 const WRITING_MS = 3 * 60 * 1000
 export const SCALE = { min: 0.7, max: 2 }
 const RESERVED = new Set(['models', 'poster'])
+/** How many agents hang out in the lounge before anyone has chosen. */
+export const LOUNGE_DEFAULT = 3
 
 // ------------------------------------------------------------------------------------------------ the file
 
@@ -176,6 +184,23 @@ export function checkPersona(raw, { strict = false, needLines = false } = {}) {
   return { persona }
 }
 
+// ------------------------------------------------------------------------------------------------ the lounge
+
+const fileOfEntry = e => (typeof e === 'string' ? e : e?.file)
+
+/** The lounge list as models.json keeps it (it may name models that are not agents now), or the default when unset. */
+export function loungeList(config) {
+  if (Array.isArray(config?.lounge)) return config.lounge.filter(f => typeof f === 'string' && f)
+  const agents = Array.isArray(config?.agents) ? config.agents.map(fileOfEntry).filter(Boolean) : []
+  return agents.slice(0, LOUNGE_DEFAULT)
+}
+
+/** The agents who hang out in the lounge now, by file, in the list's order. */
+export function loungeOf(config) {
+  const agents = new Set(Array.isArray(config?.agents) ? config.agents.map(fileOfEntry).filter(Boolean) : [])
+  return loungeList(config).filter(f => agents.has(f))
+}
+
 // ------------------------------------------------------------------------------------------------ setup
 
 export default function setup(api) {
@@ -254,11 +279,12 @@ export default function setup(api) {
       const config = await readConfig()
       const rows = []
       const seen = new Set()
+      const lounging = new Set(loungeOf(config))
       for (const [role, e] of entries(config)) {
         const file = fileOf(e)
         if (!file || seen.has(file)) continue
         seen.add(file)
-        rows.push(await row(file, role, typeof e === 'object' ? e : {}))
+        rows.push(await row(file, role, typeof e === 'object' ? e : {}, role === 'agent' && lounging.has(file)))
       }
       let names = []
       try {
@@ -267,13 +293,13 @@ export default function setup(api) {
         // no models folder yet
       }
       for (const name of names.sort())
-        if (/\.vrm$/i.test(name) && !seen.has(name)) rows.push(await row(name, 'off', {}))
+        if (/\.vrm$/i.test(name) && !seen.has(name)) rows.push(await row(name, 'off', {}, false))
       list = rows
       scannedAt = Date.now()
     }
   }
 
-  async function row(file, role, e) {
+  async function row(file, role, e, lounge) {
     const meta = await metaOf(file)
     const persona = e.persona && typeof e.persona === 'object' ? e.persona : {}
     const limits = meta.error ? [] : meta.limits
@@ -289,6 +315,8 @@ export default function setup(api) {
       licence: meta.error ? 'The licence could not be read from the file.' : `${meta.licence}${limits.length ? `: ${limits.join(', ')}` : ': no limits stated'}`,
       warning: limits.length ? `The licence limits how this model may be used (${limits.join(', ')}). Use it only in ways it allows.` : '',
       hasPersona,
+      /** Whether this agent hangs out in the lounge while it is not working. */
+      lounge: !!lounge,
       writing: false,
       note: '',
     }
@@ -519,6 +547,23 @@ export default function setup(api) {
     api.json(res, 200, { ok: true, scale: value })
   })
 
+  api.route('POST', '/characters/lounge', async (req, res, body) => {
+    const file = fileName(body)
+    if (!file || typeof body?.on !== 'boolean') return fail(res, 400, 'Say which model, and whether it hangs out in the lounge.')
+    let status = 200
+    let problem = ''
+    await change(async config => {
+      const hit = await find(config, file)
+      if (!hit) return void ((status = 404), (problem = 'That model is not listed in models.json.'))
+      if (hit[0] !== 'agent') return void ((status = 400), (problem = 'Only agents hang out in the lounge. Make this model an agent first.'))
+      // the first choice writes the whole list down, starting from the default
+      const now = loungeList(config)
+      config.lounge = body.on ? (now.includes(file) ? now : [...now, file]) : now.filter(f => f !== file)
+    })
+    if (status !== 200) return fail(res, status, problem)
+    api.json(res, 200, { ok: true })
+  })
+
   api.route('POST', '/characters/remove', async (req, res, body) => {
     const file = fileName(body)
     if (!file || !/\.vrm$/i.test(file)) return fail(res, 400, 'Say which model.')
@@ -526,6 +571,7 @@ export default function setup(api) {
     await change(config => {
       if (fileOf(config.claude) === file) return void (problem = 'Make another model Claude first, then remove this one.')
       const keep = e => fileOf(e) !== file
+      if (Array.isArray(config.lounge)) config.lounge = loungeList(config).filter(f => f !== file)
       if (Array.isArray(config.agents)) config.agents = config.agents.filter(keep)
       if (Array.isArray(config.unused)) config.unused = config.unused.filter(keep)
     })

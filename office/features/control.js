@@ -143,6 +143,7 @@ export function makeControl(ctx) {
     if (!text) throw new Error('write the task first')
     const agentType = page.querySelector('select.kind').value
     const character = page.querySelector('select.character').value
+    // the server keeps the pick and puts it on the agent when the session lists it, whatever mod that session runs
     await ask('/command', { session: s.id, kind: 'agent', text, agentType, ...(character ? { character } : {}) })
     area.value = ''
     const who = character ? page.querySelector('select.character').selectedOptions[0]?.textContent.split(' (')[0].split(' · ')[0] : ''

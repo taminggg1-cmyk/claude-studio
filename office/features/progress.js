@@ -1,15 +1,22 @@
 // The progress feature: the studio grows like a tycoon game. The office server keeps lifetime counts (agents hired,
-// tests passed, fires put out, files edited, sessions) and sends them with every update. This feature shows them on
-// plaques over a trophy shelf on the back wall, and unlocks a prop in the room at each milestone: an aquarium, an arcade
-// cabinet, a gold fire safety trophy, a neon sign and a bigger plant. The next locked prop shows as a faint outline.
+// tests passed, fires put out, files edited, sessions, git commits) and sends them with every update. This feature
+// shows them on plaques over a trophy shelf on the back wall, and unlocks a prop in the room at each milestone: an
+// aquarium, an arcade cabinet, a gold fire safety trophy, a neon sign, a bigger plant and paper planes gliding over the
+// desks. The next locked prop shows as a faint outline.
 // When a milestone is crossed while the window is open there is confetti at the new prop and a toast at the top.
 //
+// Three more milestones have no plaque: a commit made after midnight (a night owl figurine on the shelf), and the best
+// streak of days in a row the office was used (7: a felt pennant over the shelf; 30: a gold frame round the standup
+// feature's wall calendar, which turns gold itself).
+//
 // Demo switch: ?progress=N fakes the counts as N times a base set (N=0 is the bare room, 3 or more unlocks everything).
-// Add &grow and the counts jump to (N+1) times the base after 10 seconds, so a toast can be watched.
+// Add &grow and the counts jump to (N+1) times the base after 10 seconds, so a toast can be watched. ?streak=N (on a
+// demo page) fakes the best streak.
 
 import * as THREE from 'three'
 import { mergeGeometries } from '../vendor/BufferGeometryUtils.js'
 import { P, brass, cyl, group, mat, put, rbox, sph, textTexture } from '../kit.js'
+import { CALENDAR } from './standup.js'
 
 /** The five counted things, as the mod names them, with the words for a plaque. */
 const STATS = [
@@ -18,19 +25,33 @@ const STATS = [
   { name: 'fires-out', plaque: 'fires put out' },
   { name: 'files-edited', plaque: 'files edited' },
   { name: 'sessions', plaque: 'sessions' },
+  { name: 'commits', plaque: 'commits' },
 ]
 
-/** What each count unlocks, and at how many. */
+/**
+ * What each count unlocks, and at how many. The last three have no plaque of their own: `night-commits` (commits made
+ * between midnight and five in the morning) and `streak-best` (the most days in a row the office was used, from the
+ * server's `stats.best`); `why` says what earned them and `more` what is still needed.
+ */
 const UNLOCKS = [
   { key: 'aquarium', title: 'Aquarium', stat: 'agents-hired', at: 10 },
   { key: 'arcade', title: 'Arcade cabinet', stat: 'tests-passed', at: 25 },
   { key: 'trophy', title: 'Fire safety trophy', stat: 'fires-out', at: 3 },
   { key: 'neon', title: 'Neon sign', stat: 'files-edited', at: 100 },
   { key: 'plant', title: 'Big plant', stat: 'sessions', at: 20 },
+  { key: 'planes', title: 'Paper planes', stat: 'commits', at: 50 },
+  { key: 'owl', title: 'Night owl', stat: 'night-commits', at: 1, why: () => 'a commit after midnight', more: () => 'a commit between midnight and 5 am' },
+  { key: 'pennant', title: 'Streak pennant', stat: 'streak-best', at: 7, why: () => '7 days in a row', more: n => `a 7-day streak (best so far: ${n})` },
+  { key: 'gold', title: 'Gold calendar', stat: 'streak-best', at: 30, why: () => '30 days in a row', more: n => `a 30-day streak (best so far: ${n})` },
 ]
 
-/** The counts ?progress=1 fakes (the scale is multiplied in). */
-const DEMO_BASE = { 'agents-hired': 4, 'tests-passed': 10, 'fires-out': 1, 'files-edited': 40, sessions: 8 }
+/** Why a milestone was unlocked, for its banner, and what it still needs, for the shelf's "next unlock" line. */
+const plaqueOf = u => STATS.find(s => s.name === u.stat)?.plaque ?? u.stat
+const whyOf = u => u.why?.() ?? `${u.at} ${plaqueOf(u)}`
+const moreOf = (u, n) => u.more?.(n) ?? `${u.at - n} more ${plaqueOf(u)}`
+
+/** The counts ?progress=1 fakes (the scale is multiplied in; 3 or more unlocks everything). */
+const DEMO_BASE = { 'agents-hired': 4, 'tests-passed': 10, 'fires-out': 1, 'files-edited': 40, sessions: 8, commits: 20, 'night-commits': 1, 'streak-best': 10 }
 
 const TOAST_SECONDS = 6
 const ease = x => 1 + 2.70158 * Math.pow(x - 1, 3) + 1.70158 * Math.pow(x - 1, 2)
@@ -100,19 +121,20 @@ export function makeProgress(ctx) {
   }
 
   // ---------------------------------------------------------------- the trophy shelf on the back wall
+  // (six plaques: the board sits a little left of the aquarium, clear of the coffee corner's shelves and the fig)
   const SHELF_X = -2.3
-  const shelf = group(scene, SHELF_X, 0, z0)
-  put(shelf, rbox(2.64, 0.94, 0.05, 0.02), mat(P.oakLight), 0, 2.5, 0.03)
-  put(shelf, rbox(3.0, 0.05, 0.26, 0.02), mat(P.oak), 0, 1.78, 0.14)
-  for (const dx of [-1.3, 1.3]) put(shelf, rbox(0.04, 0.16, 0.2, 0.01), brass(), dx, 1.68, 0.1)
+  const shelf = group(scene, SHELF_X - 0.15, 0, z0)
+  put(shelf, rbox(3.19, 0.94, 0.05, 0.02), mat(P.oakLight), 0, 2.5, 0.03)
+  put(shelf, rbox(3.4, 0.05, 0.26, 0.02), mat(P.oak), 0, 1.78, 0.14)
+  for (const dx of [-1.45, 1.45]) put(shelf, rbox(0.04, 0.16, 0.2, 0.01), brass(), dx, 1.68, 0.1)
   // the plaques are one picture, redrawn when a count changes
   const board = document.createElement('canvas')
-  board.width = 1280
+  board.width = 1536
   board.height = 440
   const boardTexture = new THREE.CanvasTexture(board)
   boardTexture.colorSpace = THREE.SRGBColorSpace
   boardTexture.anisotropy = 4
-  const boardMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.52, 0.84), new THREE.MeshBasicMaterial({ map: boardTexture }))
+  const boardMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.07, 0.84), new THREE.MeshBasicMaterial({ map: boardTexture }))
   boardMesh.position.set(0, 2.5, 0.062)
   shelf.add(boardMesh)
   bake(shelf)
@@ -165,7 +187,7 @@ export function makeProgress(ctx) {
     })
     g.font = '700 32px "Segoe UI", sans-serif'
     g.fillStyle = '#a95f45'
-    g.fillText(next ? `Next unlock: ${next.title}, ${next.at - next.n} more ${STATS.find(s => s.name === next.stat).plaque}` : 'Everything is unlocked. Nice studio!', W / 2, 394, W - 60)
+    g.fillText(next ? `Next unlock: ${next.title}, ${moreOf(next, next.n)}` : 'Everything is unlocked. Nice studio!', W / 2, 394, W - 60)
     boardTexture.needsUpdate = true
   }
 
@@ -377,7 +399,140 @@ export function makeProgress(ctx) {
     return { group: g, anim: null, size: [1.3, 2.2, 1.3], center: [px, 1.1, pz], top: 2.2 }
   }
 
-  const BUILDERS = { aquarium: buildAquarium, arcade: buildArcade, trophy: buildTrophy, neon: buildNeon, plant: buildPlant }
+  /** A paper plane, its nose along +z: two wings folded up from a keel. */
+  function paperPlane(scale = 1) {
+    const s = scale
+    const nose = [0, 0, 0.17 * s]
+    const tailMid = [0, 0.012 * s, -0.11 * s]
+    const left = [-0.11 * s, 0.03 * s, -0.12 * s]
+    const right = [0.11 * s, 0.03 * s, -0.12 * s]
+    const keel = [0, -0.045 * s, -0.1 * s]
+    const tris = [nose, left, tailMid, nose, tailMid, right, nose, tailMid, keel]
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(tris.flat(), 3))
+    geo.computeVertexNormals()
+    return geo
+  }
+
+  /** Paper planes: a few folded planes gliding in slow, banked loops high over the desks. */
+  function buildPlanes() {
+    const g = group(scene, 0, 0, 0)
+    const COLS = [0xfffdf8, 0xf6e7b8, 0xd8e6f0, 0xf6d5c4, 0xe3efd9]
+    const planes = new THREE.InstancedMesh(paperPlane(2.2), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, side: THREE.DoubleSide }), COLS.length)
+    planes.frustumCulled = false
+    planes.castShadow = true
+    COLS.forEach((c, i) => planes.setColorAt(i, new THREE.Color(c)))
+    g.add(planes)
+    const PATHS = COLS.map((_, i) => ({ cx: -1.2 + (i % 3) * 2.3, cz: -0.6 + (i % 2) * 1.4, r: 2.3 + i * 0.45, y: 2.8 + (i % 3) * 0.2, w: (i % 2 ? -1 : 1) * (0.3 + i * 0.035), ph: i * 1.3 }))
+    const m4 = new THREE.Matrix4()
+    const q = new THREE.Quaternion()
+    const e = new THREE.Euler(0, 0, 0, 'YXZ')
+    const pos = new THREE.Vector3()
+    const one = new THREE.Vector3(1, 1, 1)
+    const anim = t => {
+      PATHS.forEach((f, i) => {
+        const a = f.ph + f.w * t
+        const bob = Math.sin(t * 1.1 + i * 2) * 0.12
+        pos.set(f.cx + f.r * Math.cos(a), f.y + bob, f.cz + f.r * Math.sin(a))
+        // heading along the circle, banked into the turn, nose following the bob
+        e.set(-Math.cos(t * 1.1 + i * 2) * 0.13, Math.atan2(-f.r * f.w * Math.sin(a), f.r * f.w * Math.cos(a)), Math.sign(f.w) * 0.38)
+        m4.compose(pos, q.setFromEuler(e), one)
+        planes.setMatrixAt(i, m4)
+      })
+      planes.instanceMatrix.needsUpdate = true
+    }
+    anim(0)
+    return { group: g, anim, size: [1, 1, 1], center: [0.6, 3.0, 0.2], top: 3.2, ghostGeo: paperPlane(5) }
+  }
+
+  /** A little owl figurine at the left end of the shelf's ledge, for a commit made after midnight. It looks about. */
+  function buildOwl() {
+    const ox = SHELF_X - 1.55
+    const g = group(scene, ox, 1.805, z0 + 0.15)
+    const feathers = mat(0x8a6446, { roughness: 0.8 })
+    put(g, rbox(0.16, 0.035, 0.12, 0.01), mat(P.oakDark), 0, 0.0175, 0)
+    put(g, sph(0.06, 14, 10), feathers, 0, 0.095, 0, { s: [1, 1.15, 0.9] })
+    put(g, sph(0.045, 12, 8), mat(0xe8d3b0, { roughness: 0.85 }), 0, 0.09, 0.03, { s: [1, 1.2, 0.6], cast: false })
+    for (const s of [-1, 1]) put(g, sph(0.012, 6, 5), mat(0xd9a441), s * 0.02, 0.04, 0.035, { s: [1.3, 0.6, 1.3], cast: false })
+    const head = group(g, 0, 0.17, 0)
+    const keepPut = (geo, m, x, y, z, o) => {
+      const mesh = put(head, geo, m, x, y, z, o)
+      mesh.userData.keep = true // the head turns, so it stays out of the bake
+      return mesh
+    }
+    keepPut(sph(0.052, 14, 10), feathers, 0, 0, 0, { s: [1.1, 0.95, 1] })
+    for (const s of [-1, 1]) {
+      keepPut(new THREE.ConeGeometry(0.014, 0.04, 6), feathers, s * 0.032, 0.05, 0, { rz: -s * 0.35 })
+      keepPut(new THREE.CircleGeometry(0.019, 16), mat(0xfbf3df), s * 0.022, 0.004, 0.049, { cast: false })
+      keepPut(new THREE.CircleGeometry(0.009, 12), mat(0x2b2018), s * 0.022, 0.004, 0.0505, { cast: false })
+    }
+    keepPut(new THREE.ConeGeometry(0.009, 0.022, 6), mat(0xe0a03a), 0, -0.016, 0.055, { rx: Math.PI / 2 + 0.4, cast: false })
+    bake(g)
+    // now and then the head turns to look at the room, then back
+    const anim = t => {
+      const k = (t % 9) / 9
+      head.rotation.y = k > 0.75 ? Math.sin((k - 0.75) * 4 * Math.PI) * 0.9 : 0
+    }
+    return { group: g, anim, size: [0.18, 0.26, 0.14], center: [ox, 1.935, z0 + 0.15], top: 2.1 }
+  }
+
+  /** A felt pennant on the wall above the trophy shelf, for a 7-day streak, hanging from a little dowel. */
+  function buildPennant() {
+    const px = SHELF_X - 0.15
+    const py = 3.38
+    const g = group(scene, px, py, z0 + 0.03)
+    const W = 1.15
+    const H = 0.4
+    const c = document.createElement('canvas')
+    c.width = 512
+    c.height = 180
+    const pg = c.getContext('2d')
+    // the felt: a long triangle pointing right, with a darker band down its left edge
+    pg.fillStyle = '#b5523a'
+    pg.beginPath()
+    pg.moveTo(0, 0)
+    pg.lineTo(512, 90)
+    pg.lineTo(0, 180)
+    pg.closePath()
+    pg.fill()
+    pg.fillStyle = '#8f3d2b'
+    pg.fillRect(0, 0, 46, 180)
+    pg.fillStyle = '#f6ead2'
+    pg.font = '900 50px "Segoe UI", sans-serif'
+    pg.textBaseline = 'middle'
+    pg.fillText('7-DAY', 70, 66, 300)
+    pg.font = '800 34px "Segoe UI", sans-serif'
+    pg.fillText('STREAK', 74, 114, 230)
+    const tex = new THREE.CanvasTexture(c)
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.anisotropy = 4
+    put(g, new THREE.PlaneGeometry(W, H), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 0.95 }), W / 2, 0, 0.012, { cast: false })
+    put(g, cyl(0.014, 0.014, H + 0.12, 8), mat(P.oak), -0.01, 0, 0.02)
+    for (const s of [-1, 1]) put(g, sph(0.022, 10, 8), brass(), -0.01, s * (H / 2 + 0.07), 0.02)
+    // the cord it hangs from, up to a nail
+    put(g, cyl(0.004, 0.004, 0.2, 4), mat(0x6b5a44), -0.01, H / 2 + 0.16, 0.012, { cast: false })
+    bake(g)
+    return { group: g, anim: null, size: [W + 0.1, H + 0.3, 0.06], center: [px + W / 2, py + 0.08, z0 + 0.04], top: py + 0.3 }
+  }
+
+  /** A gilded frame round the wall calendar, with a gold rosette, for a 30-day streak (the page turns gold too). */
+  function buildGold() {
+    const { x, y, w, h } = CALENDAR
+    const g = group(scene, x, y, z0 + 0.03)
+    const gold = mat(0xe3b53f, { metalness: 0.6, roughness: 0.3, emissive: 0x5a3a00, emissiveIntensity: 0.35 })
+    const t = 0.04
+    put(g, rbox(w + 2 * t, t, 0.03, 0.01), gold, 0, h / 2 + t / 2, 0)
+    put(g, rbox(w + 2 * t, t, 0.03, 0.01), gold, 0, -h / 2 - t / 2, 0)
+    for (const s of [-1, 1]) put(g, rbox(t, h, 0.03, 0.01), gold, s * (w / 2 + t / 2), 0, 0)
+    // a rosette with two ribbon tails at the top right corner
+    put(g, cyl(0.07, 0.07, 0.02, 18), gold, w / 2, h / 2, 0.03, { rx: Math.PI / 2 })
+    put(g, cyl(0.045, 0.045, 0.022, 14), mat(0xc0392b), w / 2, h / 2, 0.032, { rx: Math.PI / 2 })
+    for (const s of [-1, 1]) put(g, rbox(0.035, 0.12, 0.006, 0.003), mat(0xc0392b), w / 2 + s * 0.025, h / 2 - 0.1, 0.025, { rz: s * 0.25 })
+    bake(g)
+    return { group: g, anim: null, size: [w + 0.12, h + 0.12, 0.06], center: [x, y, z0 + 0.04], top: y + h / 2 + 0.1 }
+  }
+
+  const BUILDERS = { aquarium: buildAquarium, arcade: buildArcade, trophy: buildTrophy, neon: buildNeon, plant: buildPlant, planes: buildPlanes, owl: buildOwl, pennant: buildPennant, gold: buildGold }
   const props = {}
   for (const u of UNLOCKS) {
     const p = BUILDERS[u.key]()
@@ -386,7 +541,7 @@ export function makeProgress(ctx) {
     p.pop = 1 // 0 to 1 while it pops in
     p.unlocked = false
     // a faint outline of where it will stand
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(...p.size)), new THREE.LineBasicMaterial({ color: 0x8a6a50, transparent: true, opacity: 0.4, depthWrite: false }))
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(p.ghostGeo ?? new THREE.BoxGeometry(...p.size)), new THREE.LineBasicMaterial({ color: 0x8a6a50, transparent: true, opacity: 0.4, depthWrite: false }))
     edges.position.set(...p.center)
     edges.visible = false
     scene.add(edges)
@@ -409,13 +564,20 @@ export function makeProgress(ctx) {
     setTimeout(() => el.remove(), TOAST_SECONDS * 1000)
   }
 
+  // an empty board until the first counts come (a demo page gets none)
+  paintBoard({}, { ...UNLOCKS[0], n: 0, left: 1 })
   let counts = null // the counts last sent by the server (null before the first update)
+  let best = null // the best streak the server sent
+  const demoStreak = ctx.isDemo && params.has('streak') ? Math.max(0, Math.round(Number(params.get('streak')) || 0)) : null
   let shown = '' // what the plaques show now, to redraw only on a change
   let known = false // whether the starting unlocks are set (those get no confetti)
   let sinceCheck = 0
 
   function refresh() {
-    const c = demoScale !== null ? demoCounts() : counts
+    let c = demoScale !== null ? demoCounts() : counts
+    // the best streak of days in a row, from the server (or ?streak=N on a demo page)
+    if (c && best !== null) c = { ...c, 'streak-best': best }
+    if (demoStreak !== null) c = { ...c, 'streak-best': demoStreak }
     if (!c) return
     const key = JSON.stringify(c)
     if (key === shown) return
@@ -434,7 +596,8 @@ export function makeProgress(ctx) {
           try {
             fx.confetti(new THREE.Vector3(p.center[0], p.top, p.center[2]), 90)
           } catch {}
-          toast(u.title, `${u.at} ${STATS.find(s => s.name === u.stat).plaque}`)
+          toast(u.title, whyOf(u))
+          window.dispatchEvent(new CustomEvent('studio:sound', { detail: { name: 'cheer' } }))
         }
       }
       if (!has) {
@@ -451,6 +614,7 @@ export function makeProgress(ctx) {
     apply(snapshot) {
       const stats = snapshot?.stats?.counts
       if (stats && typeof stats === 'object') counts = stats
+      if (Number.isFinite(snapshot?.stats?.best)) best = snapshot.stats.best
       refresh()
     },
     step(dt, t) {

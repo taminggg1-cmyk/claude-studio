@@ -280,6 +280,7 @@ export function makeWeather(ctx) {
 
   // eased state: what the scene looks like now
   const now = { cloud: 0, rain: 0, snow: 0, fog: 0, storm: 0, wind: 0, pile: 0, sun: 1, sky: 1, gain: 1, tint: 0 }
+  window.__studioWeather = now // the sound feature reads the rain from here
   let flash = 0
   let flashes = [] // seconds until the next flickers of the current strike
   let nextStrike = demoKind === 'storm' ? 3 : 4
@@ -305,6 +306,7 @@ export function makeWeather(ctx) {
   }
 
   function strike() {
+    window.dispatchEvent(new CustomEvent('studio:lightning')) // the sound feature answers with thunder
     flash = 1
     flashes = [0.16 + rnd() * 0.1, 0.4 + rnd() * 0.2]
   }

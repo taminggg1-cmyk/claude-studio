@@ -56,11 +56,16 @@ export async function runControlCommand($: EngineInterface, command: Command): P
     return
   }
   if (command.kind === 'agent') {
-    const description = text.length > 48 ? `${text.slice(0, 45).trimEnd()}…` : text
-    const started = await $.agent.spawn({ prompt: text, description, ...(command.agentType ? { subagentType: command.agentType } : {}) })
     const character = typeof command.character === 'string' && /^[\w.-]{1,120}\.(vrm|glb)$/i.test(command.character) ? command.character : ''
-    if (character && started.agentId) wearing.set(started.agentId, character)
-    else if (character) pending.set(description, { file: character, at: Date.now() })
+    const description = text.length > 48 ? `${text.slice(0, 45).trimEnd()}…` : text
+    // remember the pick by the agent's description before it starts: the agent may show up in the room (the core's
+    // next look at $.agent.list) before the spawn says its id
+    if (character) pending.set(description, { file: character, at: Date.now() })
+    const started = await $.agent.spawn({ prompt: text, description, ...(command.agentType ? { subagentType: command.agentType } : {}) })
+    if (character && started.agentId && !wearing.has(started.agentId)) {
+      wearing.set(started.agentId, character)
+      pending.delete(description)
+    }
     if (wearing.size > 50) wearing.delete(wearing.keys().next().value as string)
     $.ui.toast(`Claude's studio started an agent: ${description}`)
   }

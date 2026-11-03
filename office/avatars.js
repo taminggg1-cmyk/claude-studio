@@ -27,9 +27,14 @@ export async function loadModelConfig() {
       if (file(e) && Number.isFinite(s)) scales[file(e)] = Math.max(0.7, Math.min(2, s))
     }
     for (const e of [config.claude, ...agents]) if (file(e) && e?.persona && typeof e.persona === 'object') personas[file(e)] = e.persona
+    // the agents who hang out in the lounge while not working: models.json's "lounge" list, or the first three
+    // (the same rule as server-features/characters.mjs)
+    const agentFiles = agents.map(file).filter(Boolean)
+    const lounge = (Array.isArray(config.lounge) ? config.lounge.filter(f => typeof f === 'string') : agentFiles.slice(0, 3)).filter(f => agentFiles.includes(f))
     return {
       claude: file(config.claude) || null,
-      agents: agents.map(file).filter(Boolean),
+      agents: agentFiles,
+      lounge,
       poster: file(config.poster) || null,
       credits: [config.claude, ...agents].map(e => e?.credit).filter(Boolean),
       personas,

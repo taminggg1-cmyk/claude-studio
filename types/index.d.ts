@@ -58,6 +58,12 @@ export type StudioInfo = {
   sky: SkyMode
   /** What each feature module (hooks/features/) tells the window, by the feature's name; plain JSON values. */
   extras?: Record<string, unknown>
+  /**
+   * What this version of the mod can do for the window (`pick-character`: an agent started from the panel wears the
+   * character picked for it). A session started before an update runs the old mod until /reload-plugins, so the
+   * window reads this to tell you when a session cannot do what you ask yet.
+   */
+  can?: string[]
 }
 
 declare module 'claude-code' {

@@ -415,6 +415,77 @@ function memphisTable(parent, x, z) {
   return g
 }
 
+/**
+ * The lounge TV: a cream flat screen on a low oak media console, facing the sofa (-z) from the front of the room. The
+ * screen's picture is a canvas the TV feature (features/tv.js) draws; the set also carries a light that spills the
+ * picture's colour onto the people watching and a soft glow around the screen, both dark until the TV is on.
+ */
+function tvSet(parent, x, z) {
+  const g = group(parent, x, 0, z, Math.PI) // its front (+z in its own frame) faces the sofa
+  // the console: a long low cabinet on short legs, with sage and terracotta doors on the sofa side
+  const top = 0.4
+  put(g, rbox(1.8, 0.32, 0.44, 0.04), mat(P.oak), 0, top - 0.16, 0)
+  for (const sx of [-0.8, 0.8]) for (const sz of [-0.16, 0.16]) put(g, cyl(0.024, 0.018, 0.09, 10), mat(P.oakDark), sx, 0.045, sz)
+  for (const [dx, c] of [
+    [-0.58, P.sage],
+    [0, P.terracotta],
+    [0.58, P.sage],
+  ]) {
+    put(g, rbox(0.54, 0.24, 0.02, 0.01), mat(c, { roughness: 0.9 }), dx, top - 0.16, 0.222)
+    put(g, sph(0.016, 10, 8), brass(), dx + (dx < 0 ? 0.2 : dx > 0 ? -0.2 : 0.2), top - 0.16, 0.238)
+  }
+  // a little plant at one end, two books at the other
+  deskPlant(g, -0.7, top, 0.02, 1, 77)
+  put(g, rbox(0.24, 0.035, 0.17, 0.008), mat(P.dustyBlue), 0.68, top + 0.018, 0.02, { ry: 0.12 })
+  put(g, rbox(0.22, 0.03, 0.15, 0.008), mat(P.peach), 0.68, top + 0.05, 0.02, { ry: -0.08 })
+  // the TV on its foot, with a soundbar in front
+  const shell = mat(0xf1e8da, { roughness: 0.55 })
+  put(g, rbox(0.46, 0.025, 0.2, 0.01), shell, 0, top + 0.0125, -0.04)
+  put(g, rbox(0.1, 0.1, 0.035, 0.01), shell, 0, top + 0.07, -0.05)
+  const tvY = top + 0.47
+  put(g, rbox(1.2, 0.72, 0.07, 0.03), shell, 0, tvY, -0.02)
+  put(g, rbox(0.84, 0.48, 0.08, 0.035), shell, 0, tvY - 0.02, -0.08) // the back, the side the camera sees
+  put(g, rbox(0.7, 0.055, 0.08, 0.025), mat(P.graphite, { roughness: 0.6 }), 0, top + 0.03, 0.14)
+  const screenMat = new THREE.MeshStandardMaterial({ color: 0x15151a, roughness: 0.28, metalness: 0.1, emissive: 0xffffff, emissiveIntensity: 0 })
+  put(g, new THREE.PlaneGeometry(1.1, 0.62), screenMat, 0, tvY, 0.0165, { cast: false })
+  // the picture's light on the watchers and a glow around the set (the feature colours them; off, they are dark)
+  const light = new THREE.PointLight(0xbcd2ff, 0, 6, 1.6)
+  light.position.set(0, tvY, 0.55)
+  g.add(light)
+  const halo = glowSprite(g, 0, tvY, 0.32, 2.3, 0)
+  halo.material.color.set(0xbcd2ff)
+  g.updateMatrixWorld(true)
+  const at = new THREE.Vector3(0, tvY, 0.02).applyMatrix4(g.matrixWorld)
+  // what a click on the TV hits: the console and the screen (in the room's frame; the set is turned half way round)
+  const box = new THREE.Box3(new THREE.Vector3(x - 0.92, 0, z - 0.25), new THREE.Vector3(x + 0.92, tvY + 0.38, z + 0.25))
+  return { group: g, screenMat, light, halo, at, box, yaw: Math.PI }
+}
+
+/** A striped paper bucket of popcorn, on the coffee table while people watch TV. */
+function popcornBucket(parent, x, y, z) {
+  const g = group(parent, x, y, z)
+  g.userData.dynamic = true
+  const c = document.createElement('canvas')
+  c.width = 64
+  c.height = 8
+  const s = c.getContext('2d')
+  for (let i = 0; i < 8; i++) {
+    s.fillStyle = i % 2 ? '#fbf3e6' : '#d8574a'
+    s.fillRect(i * 8, 0, 8, 8)
+  }
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  put(g, cyl(0.075, 0.055, 0.13, 16), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 }), 0, 0.065, 0)
+  const rnd = seeded(91)
+  for (let i = 0; i < 16; i++) {
+    const a = rnd() * Math.PI * 2
+    const r = rnd() * 0.06
+    put(g, sph(0.02 + rnd() * 0.008, 8, 6), mat(i % 4 ? 0xfbefc8 : 0xf3d58a, { roughness: 0.9 }), Math.cos(a) * r, 0.135 + (0.06 - r) * 0.5 + rnd() * 0.02, Math.sin(a) * r, { cast: false })
+  }
+  g.visible = false
+  return g
+}
+
 function arcFloorLamp(parent, x, z, ry, lights) {
   const g = group(parent, x, 0, z, ry)
   put(g, cyl(0.2, 0.22, 0.06, 32), mat(P.travertine, { roughness: 0.5 }), 0, 0.03, 0)
@@ -866,7 +937,10 @@ export function buildRoom(scene) {
   modularSofa(slotOf('sofa', 'straight'), -4.9, 3.45, 0)
   memphisTable(room, -4.9, 4.7)
   tubChair(room, -2.6, 5.35, -2.1, P.boucle)
-  put(room, discSlab(0.3, 0.26, 0.08), boucle(P.terracotta, 1.2), -5.2, 0.0, 6.35)
+  put(room, discSlab(0.3, 0.26, 0.08), boucle(P.terracotta, 1.2), -6.45, 0.0, 6.35)
+  // the TV in front of the sofa, and a bucket of popcorn on the coffee table for when it is on
+  const tv = tvSet(room, -4.9, 6.5)
+  tv.popcorn = popcornBucket(room, -4.45, 0.44, 4.46)
   modularSofa(room, x0 + 0.55, 4.45, Math.PI / 2)
   const floorLamps = slotOf('lamps', 'floor')
   arcFloorLamp(floorLamps, x0 + 0.5, 6.45, 0.45, lights)
@@ -1055,6 +1129,11 @@ export function buildRoom(scene) {
     poster,
     /** The studio cat's group, and the lamp glow sprites (the interact feature moves and switches them). */
     cat,
+    /**
+     * The lounge TV (the tv feature runs it): the screen's material, its light and glow, the popcorn on the coffee
+     * table, the screen's centre (`at`) and a box around the set for clicks.
+     */
+    tv,
     lampGlows,
     /** The rolling whiteboard: its group, the board mesh and the board's size. */
     whiteboard: room.userData.whiteboard,
@@ -1359,8 +1438,10 @@ function tokenRack(room, x, z, animated) {
       value[0] = Number.isFinite(context) ? Math.max(0, Math.min(100, context)) : null
       value[1] = Number.isFinite(fiveHour) ? Math.max(0, Math.min(100, fiveHour)) : null
     },
-    /** For checks: what the strips are showing. */
+    /** What the strips are showing (the usage tag writes it as numbers; checks read it too). */
     reading: () => ({ context: value[0], fiveHour: value[1] }),
+    /** Just above the rack's top, in the room: where the usage tag floats. */
+    anchor: new THREE.Vector3(x, H + 0.2, z),
   }
 }
 

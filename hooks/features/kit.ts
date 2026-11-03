@@ -17,6 +17,8 @@
 
 import type { Register } from 'claude-code'
 
+import type { Commit, PullRequest, Push } from './git'
+
 export type On = Parameters<Register>[0]
 
 /**
@@ -33,7 +35,12 @@ export type On = Parameters<Register>[0]
  *   turn-complete  a loop's turn ended (data: agentId as above)
  *   tool-start     a tool call is about to run (data: tool, toolUseId, agentId, input)
  *   tool-end       a tool call ended (data: tool, toolUseId, agentId, input, result); also after a refused call
- * `who` is 'main' for the session's lead, else the agent's id.
+ *   commit         a shell command made a git commit, one signal per commit (data: who, commit, dirs, toolUseId);
+ *                  commit.amend when it rewrote the last commit (`git commit --amend`)
+ *   push           a shell command pushed (data: who, push, dirs, toolUseId); after that command's commits
+ *   pull-request   `gh pr create` opened a pull request (data: who, pr, dirs, toolUseId); after that command's push
+ * `who` is 'main' for the session's lead, else the agent's id. `dirs` are the folders the command moved to before git
+ * ran (see ./git.ts): relative ones are relative to the session's folder at that moment.
  */
 export type Signal =
   | 'agent-hired'
@@ -48,6 +55,9 @@ export type Signal =
   | 'turn-complete'
   | 'tool-start'
   | 'tool-end'
+  | 'commit'
+  | 'push'
+  | 'pull-request'
 export type SignalData = {
   who?: string
   tool?: string
@@ -62,6 +72,11 @@ export type SignalData = {
   toolUseId?: string
   input?: Record<string, unknown>
   result?: unknown
+  /** commit, push, pull-request: what git did (see ./git.ts), and the folders the command moved to first. */
+  commit?: Commit
+  push?: Push
+  pr?: PullRequest
+  dirs?: string[]
 }
 
 /** The office server's paths a session may post to (with its token); see office/server.mjs. */

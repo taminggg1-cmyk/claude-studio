@@ -82,8 +82,12 @@ let port = 0
 const watchers = new Set()
 /** What the window asked each session to do, waiting for that session's next /inbox. */
 const inboxes = new Map()
-/** The office's lifetime counts ({ counts: {name: n}, folders: [recent session folders] }), kept in STATS. */
-let stats = { counts: {}, folders: [] }
+/**
+ * The office's lifetime counts, kept in STATS: { counts: {name: n}, folders: [recent session folders], days: [local
+ * dates a session was here, YYYY-MM-DD, oldest first], daily: {date: {name: n}} (the last two weeks), standup: { day,
+ * at } (when the day's first session joined: the window holds that day's standup once) }.
+ */
+let stats = { counts: {}, folders: [], days: [], daily: {}, standup: null }
 let statsDirty = false
 
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
@@ -99,7 +103,7 @@ function hostIsLocal(req) {
 
 function snapshot() {
   const list = [...sessions.values()].sort((a, b) => a.joined - b.joined)
-  const snap = { sessions: list.map(({ id, name, cwd, joined, changed, skyAt, state }) => ({ id, name, cwd, joined, changed, skyAt, state })), stats }
+  const snap = { sessions: list.map(({ id, name, cwd, joined, changed, skyAt, state }) => ({ id, name, cwd, joined, changed, skyAt, state })), stats: statsView() }
   for (const [name, get] of parts) {
     try {
       snap[name] = get()
@@ -163,6 +167,49 @@ function readJson(req, res, then) {
   })
 }
 
+// ------------------------------------------------------------------------------------------------ picked characters
+
+// The character picked in the panel for a new agent. The server keeps the pick itself and puts it on that agent
+// (`helper.model`) when the session's studio lists it, so the pick works whatever version of the mod the session
+// runs (a session keeps the mod it loaded until /reload-plugins). The agent is known by its description, which the
+// mod makes from the command's text the same way as `agentDescription` here.
+/** Picks waiting for their agent to show up, by session id. */
+const picks = new Map()
+/** Agents already dressed, `${session} ${agent id}` to the model file, so the pick stays on them. */
+const dressed = new Map()
+const PICK_MS = 10 * 60_000
+
+/** The description the mod gives an agent it starts from a command (hooks/features/control.ts). */
+const agentDescription = text => (text.length > 48 ? `${text.slice(0, 45).trimEnd()}…` : text)
+
+function rememberPick(session, text, file) {
+  const now = Date.now()
+  const list = (picks.get(session) ?? []).filter(p => now - p.at < PICK_MS)
+  list.push({ task: agentDescription(text), file, at: now })
+  picks.set(session, list.slice(-20))
+}
+
+/** Puts the picked characters on a session's agents (changes `state` in place). */
+function dressHelpers(session, state) {
+  if (!Array.isArray(state.helpers)) return
+  const now = Date.now()
+  for (const h of state.helpers) {
+    if (!h || typeof h !== 'object' || typeof h.id !== 'string') continue
+    const key = `${session} ${h.id}`
+    let file = dressed.get(key)
+    if (!file) {
+      const list = picks.get(session)
+      const i = list ? list.findIndex(p => p.task === h.task && now - p.at < PICK_MS) : -1
+      if (i < 0) continue
+      file = list[i].file
+      list.splice(i, 1)
+      dressed.set(key, file)
+      if (dressed.size > 200) dressed.delete(dressed.keys().next().value)
+    }
+    h.model = file
+  }
+}
+
 /** A session's studio: its lead (`state.main`) and agents (`state.helpers`), with the clock, usage and sky it sees. */
 function takeState(data) {
   const now = Date.now()
@@ -177,18 +224,31 @@ function takeState(data) {
     // a session the server has not heard from yet (it started after a restart) must send its whole studio
     if (!old) return false
     old.seen = now
+    if (markDay(now)) share() // a session still here after midnight: today counts too
     return true
   }
+  dressHelpers(data.session, data.state)
   const key = JSON.stringify(data.state)
   if (old) {
     old.seen = now
     old.name = name || old.name
     old.cwd = cwd || old.cwd
-    if (old.key === key) return true
+    const newDay = markDay(now)
+    if (old.key === key) {
+      if (newDay) share()
+      return true
+    }
     if (old.state.sky !== data.state.sky) old.skyAt = now
     Object.assign(old, { state: data.state, key, changed: now })
   } else {
     sessions.set(data.session, { id: data.session, name, cwd, joined: now, changed: now, skyAt: data.state.sky && data.state.sky !== 'auto' ? now : 0, seen: now, state: data.state, key })
+    markDay(now)
+    // the first session of a new day: the window holds the day's standup (once: reloads and other windows see `at`)
+    const today = localDay(now)
+    if (stats.standup?.day !== today) {
+      stats.standup = { day: today, at: now }
+      statsDirty = true
+    }
   }
   share()
   return true
@@ -203,9 +263,94 @@ async function loadStats() {
       stats = {
         counts: { ...(got.counts || {}) },
         folders: Array.isArray(got.folders) ? got.folders.filter(f => typeof f === 'string').slice(0, 12) : [],
+        // (a stats file from before the standup has no days, daily or standup: they start empty)
+        days: Array.isArray(got.days) ? [...new Set(got.days.filter(d => typeof d === 'string' && DAY_RE.test(d)))].sort().slice(-MOST_DAYS) : [],
+        daily: cleanDaily(got.daily),
+        standup: typeof got.standup?.day === 'string' && Number.isFinite(got.standup.at) ? { day: got.standup.day, at: got.standup.at } : null,
       }
   } catch {
     // no counts yet
+  }
+}
+
+// ------------------------------------------------------------------------------------------------ days and streaks
+
+const DAY_RE = /^\d{4}-\d\d-\d\d$/
+/** How many days of use the stats file keeps (a little over a year), and for how many days it keeps daily counts. */
+const MOST_DAYS = 400
+const DAILY_DAYS = 14
+/** The counts also kept per day, for the standup's "yesterday". */
+const DAILY = ['commits', 'files-edited', 'tests-passed', 'fires-out', 'agents-hired', 'pushes', 'pull-requests']
+
+const pad = n => String(n).padStart(2, '0')
+/** A local date (this computer's time zone) as YYYY-MM-DD. */
+const dayOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+const localDay = ms => dayOf(new Date(ms))
+/** The day `n` days after `day` (YYYY-MM-DD; n may be negative), by the calendar, so daylight saving never skips one. */
+function dayPlus(day, n) {
+  const [y, m, d] = day.split('-').map(Number)
+  return dayOf(new Date(y, m - 1, d + n))
+}
+
+function cleanDaily(daily) {
+  const out = {}
+  if (!daily || typeof daily !== 'object') return out
+  for (const [day, counts] of Object.entries(daily)) {
+    if (!DAY_RE.test(day) || !counts || typeof counts !== 'object') continue
+    out[day] = {}
+    for (const name of DAILY) if (Number.isInteger(counts[name]) && counts[name] > 0) out[day][name] = counts[name]
+  }
+  return out
+}
+
+/** Notes that a session is here today; true when today is new in the list. */
+function markDay(now) {
+  const today = localDay(now)
+  if (stats.days.includes(today)) return false
+  stats.days = [...stats.days, today].sort().slice(-MOST_DAYS)
+  statsDirty = true
+  return true
+}
+
+/** Adds one post's counts to today's daily counts, and forgets days older than two weeks. */
+function addDaily(add, now) {
+  const today = localDay(now)
+  const line = (stats.daily[today] ??= {})
+  for (const name of DAILY) if (Number.isInteger(add[name]) && add[name] >= 1 && add[name] <= 100) line[name] = (line[name] || 0) + add[name]
+  const oldest = dayPlus(today, 1 - DAILY_DAYS)
+  for (const day of Object.keys(stats.daily)) if (day < oldest) delete stats.daily[day]
+}
+
+/** How many days in a row the set has, counting from `from` one `way` (-1 back, 1 forward). */
+function run(set, from, way) {
+  let n = 0
+  while (set.has(dayPlus(from, n * way))) n++
+  return n
+}
+
+/**
+ * What the window gets of the stats: the lifetime counts and folders, today's date, the streak (days in a row up to
+ * today, or up to yesterday while today has no session yet), the best streak, the days used this month and last, the
+ * counts of the last earlier day that had a session (`yesterday`, with its date), and the day's standup.
+ */
+function statsView(now = Date.now()) {
+  const today = localDay(now)
+  const set = new Set(stats.days)
+  const streak = run(set, set.has(today) ? today : dayPlus(today, -1), -1)
+  let best = streak
+  for (const day of stats.days) if (!set.has(dayPlus(day, -1))) best = Math.max(best, run(set, day, 1))
+  const month = today.slice(0, 7)
+  const lastMonth = dayPlus(`${month}-01`, -1).slice(0, 7)
+  const before = stats.days.filter(d => d < today).at(-1)
+  return {
+    counts: stats.counts,
+    folders: stats.folders,
+    today,
+    streak,
+    best,
+    days: stats.days.filter(d => d.startsWith(month) || d.startsWith(lastMonth)),
+    yesterday: before ? { day: before, counts: { ...stats.daily[before] } } : null,
+    standup: stats.standup,
   }
 }
 
@@ -218,7 +363,10 @@ function addStats(add) {
     stats.counts[k] = (Number(stats.counts[k]) || 0) + n
     changed = true
   }
-  if (changed) statsDirty = true
+  if (changed) {
+    statsDirty = true
+    addDaily(add, Date.now())
+  }
   return changed
 }
 
@@ -485,6 +633,7 @@ const server = createServer((req, res) => {
       if (list.length >= 20) return send(res, 429, 'too many waiting')
       list.push({ id: randomBytes(6).toString('hex'), kind, text, ...(agentType ? { agentType } : {}), ...(character ? { character } : {}), at: Date.now() })
       inboxes.set(data.session, list)
+      if (character) rememberPick(data.session, text, character)
       send(res, 202, '')
     })
     return

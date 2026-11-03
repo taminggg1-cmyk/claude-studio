@@ -418,28 +418,31 @@ let agentArrivals = 0
  */
 function modelFor(isLead) {
   if (!MODELS) return null
-  const worn = new Set([...people.values()].map(e => e.model))
+  const all = [...people.values()]
+  const worn = new Set(all.filter(e => !e.friend).map(e => e.model))
+  // characters off duty in the lounge: an agent is one of them while there are any (they walk over from the sofa)
+  const off = all.filter(e => e.friend && e.state === 'off' && e.model)
+  const lounging = off.map(e => e.model)
   if (isLead && MODELS.claude && !worn.has(MODELS.claude)) return MODELS.claude
   const list = MODELS.agents
   if (!list.length) return isLead ? MODELS.claude : null
-  const free = list.find(f => !worn.has(f))
-  return free ?? list[agentArrivals++ % list.length]
+  // the one the person marked "next to work" (in the lounge), else any of them
+  if (!isLead && lounging.length) return (off.find(e => e.nextUp) ?? off[Math.floor(Math.random() * off.length)]).model
+  const free = list.find(f => !worn.has(f) && !lounging.includes(f))
+  return free ?? lounging[0] ?? list[agentArrivals++ % list.length]
 }
 
-function spawn(id, info, instant) {
-  const isLead = !!info.isLead || id === 'claude'
-  const firstLead = isLead && ![...people.values()].some(e => e.isLead && e.state !== 'leaving')
-  // an agent started from the panel may come with the character picked for it (when that model is in models.json)
-  const picked = !isLead && MODELS && typeof info.model === 'string' && (info.model === MODELS.claude || MODELS.agents.includes(info.model)) ? info.model : null
-  const model = picked ?? modelFor(isLead)
-  // the built-in figure (shown until a model loads, or when there are none): Claude's own look for the main lead
-  const wearsClaude = isLead && (MODELS?.claude ? model === MODELS.claude : firstLead)
-  const taken = new Set([...people.values()].map(e => e.lookIndex))
-  const lookIndex = wearsClaude ? -1 : lookFor(info.kind || info.name || 'agent', taken)
-  const look = wearsClaude ? CLAUDE_LOOK : AGENT_LOOKS[lookIndex]
+/** Built-in figures off duty get a name of their own (at work they are named after their agent type). */
+const FRIEND_NAMES = ['Pip', 'Juniper', 'Fern', 'Rowan', 'Bean', 'Lilac', 'Wren', 'Maple']
+const personaOf = (isLead, model, kind, lookIndex) => personaFor({ isClaude: isLead, model, personas: MODELS?.personas, kind, index: lookIndex })
+const friendPersona = (model, lookIndex) => personaOf(false, model, model ? model.replace(/\.(vrm|glb)$/i, '') : FRIEND_NAMES[Math.max(0, lookIndex) % FRIEND_NAMES.length], lookIndex)
+const friendInfo = () => ({ name: 'friend', kind: 'friend', code: 'idle', detail: '', strikes: 0, cheer: 0, mood: 'calm' })
+let friendCount = 0
+
+/** Makes a person (figure, persona, voice and badge), puts them in the room's list and starts loading their model. */
+function makeEntry(id, info, { isLead, model, lookIndex, look, persona }) {
   const p = makePerson(look, id)
   scene.add(p.root)
-  const persona = personaFor({ isClaude: isLead, model, personas: MODELS?.personas, kind: info.kind || info.name, index: lookIndex })
   const voice = {
     text: '',
     last: '',
@@ -457,13 +460,36 @@ function spawn(id, info, instant) {
     p.root.visible = false
     vrmRig(model, id)
       .then(rig => {
-        if (people.get(id) !== entry) return rig.dispose()
+        if (people.get(entry.id) !== entry) return rig.dispose() // (entry.id: someone off duty may have started work)
         p.setRig(rig)
       })
       .catch(err => console.warn(`studio: the model ${model} did not load:`, err))
       .finally(() => (entry.ready = true))
     p.until(() => entry.ready, 6)
   }
+  return entry
+}
+
+function spawn(id, info, instant) {
+  const isLead = !!info.isLead || id === 'claude'
+  const firstLead = isLead && ![...people.values()].some(e => e.isLead && e.state !== 'leaving')
+  // an agent started from the panel may come with the character picked for it (when that model is in models.json)
+  const picked = !isLead && MODELS && typeof info.model === 'string' && (info.model === MODELS.claude || MODELS.agents.includes(info.model)) ? info.model : null
+  const model = picked ?? modelFor(isLead)
+  // the built-in figure (shown until a model loads, or when there are none): Claude's own look for the main lead
+  const wearsClaude = isLead && (MODELS?.claude ? model === MODELS.claude : firstLead)
+  // someone off duty in the lounge wearing that character (any of them, without character models) comes to work
+  if (!instant && !wearsClaude) {
+    const pool = [...people.values()].filter(e => e.friend && e.state === 'off' && (MODELS?.agents.length ? e.model === model : !e.model))
+    const friend = pool.find(e => e.nextUp && !isLead) ?? pool[Math.floor(Math.random() * pool.length)]
+    if (friend) return hire(friend, id, info, isLead)
+  }
+  const taken = new Set([...people.values()].map(e => e.lookIndex))
+  const lookIndex = wearsClaude ? -1 : lookFor(info.kind || info.name || 'agent', taken)
+  const look = wearsClaude ? CLAUDE_LOOK : AGENT_LOOKS[lookIndex]
+  const persona = personaOf(isLead, model, info.kind || info.name, lookIndex)
+  const entry = makeEntry(id, info, { isLead, model, lookIndex, look, persona })
+  const { p } = entry
   const seat = isLead ? seatForLead(wearsClaude || id === 'claude') : seatForAgent(people.get(info.lead))
   if (seat) {
     seat.occupant = id
@@ -490,20 +516,110 @@ function spawn(id, info, instant) {
   return entry
 }
 
+/** Gives a person a new id (in the room's list, on their figure); features drop what they kept under the old one. */
+function rekey(entry, id) {
+  features.gone(entry)
+  people.delete(entry.id)
+  entry.id = id
+  entry.p.setId(id)
+  people.set(id, entry)
+}
+
+/**
+ * Someone off duty (in the lounge) starts work as `id`: they keep their figure, get up, and walk to a desk from where
+ * they are. Their persona becomes the working one (an agent's role, or a lead's).
+ */
+function hire(entry, id, info, isLead) {
+  const { p } = entry
+  const here = [v3(p.root.position.x, aisleZ)]
+  // the lounge gets them up off the sofa and says where the walk to the desk starts
+  const from = features.hire(entry, here) ?? here
+  rekey(entry, id)
+  Object.assign(entry, { friend: false, nextUp: false, isLead, info, open: false, state: 'working', cheerSeen: info.cheer ?? 0 })
+  entry.voice.seen = { state: 'off', strikes: Number(info.strikes) || 0, cheer: Number(info.cheer) || 0, mood: 'calm', code: info.code }
+  entry.persona = personaOf(isLead, entry.model, info.kind || info.name, entry.lookIndex)
+  entry.badge.el.classList.toggle('main', isLead)
+  entry.badge.el.style.setProperty('--tag', entry.persona.color)
+  const seat = isLead ? seatForLead(false) : seatForAgent(people.get(info.lead))
+  if (seat) {
+    seat.occupant = id
+    entry.seat = seat
+    p.seat = seat
+    walkToSeat(entry, from)
+  } else {
+    entry.state = 'waiting'
+    waiting.push(entry)
+    const spot = world.lounge[waiting.length % world.lounge.length]
+    p.walk([...from, v3(spot.x, aisleZ), spot]).turn(-Math.PI / 4)
+  }
+  return entry
+}
+
+/** A person a feature kept (see features.js `keep`) has left their desk: from now on they are off duty. */
+function offDuty(entry) {
+  rekey(entry, `friend:${++friendCount}`)
+  Object.assign(entry, { friend: true, isLead: false, state: 'off', open: false, seat: null, info: friendInfo(), cheerSeen: 0 })
+  entry.p.seat = null
+  entry.p.action = null
+  entry.persona = friendPersona(entry.model, entry.lookIndex)
+  entry.badge.el.classList.remove('main')
+  entry.badge.el.style.setProperty('--tag', entry.persona.color)
+  features.offDuty(entry)
+}
+
+/**
+ * Brings someone off duty into the room (for the lounge): no desk and no session. They stand at `at` (facing `yaw`),
+ * or just outside the door; the feature moves them from there.
+ */
+function addFriend({ model = null, at = null, yaw = Math.PI / 2 } = {}) {
+  const id = `friend:${++friendCount}`
+  const known = model && knownModel(model) ? model : null
+  const taken = new Set([...people.values()].map(e => e.lookIndex))
+  const lookIndex = lookFor('friend', taken)
+  const entry = makeEntry(id, friendInfo(), { isLead: false, model: known, lookIndex, look: AGENT_LOOKS[lookIndex], persona: friendPersona(known, lookIndex) })
+  entry.friend = true
+  entry.state = 'off'
+  entry.p.root.position.copy(at ?? world.doorway.outside)
+  entry.p.root.rotation.y = entry.p.yawTarget = yaw
+  return entry
+}
+
+/** Whether a model file is one this page loaded (Claude's own or an agent's). */
+function knownModel(file) {
+  return !!MODELS && (file === MODELS.claude || MODELS.agents.includes(file))
+}
+
+/** Puts a person in another character model, keeping where they are and what they do; their persona follows it. */
+function redress(entry, model) {
+  entry.model = model
+  entry.persona = personaFor({ isClaude: entry.isLead, model, personas: MODELS?.personas, kind: entry.info.kind || entry.info.name, index: entry.lookIndex })
+  entry.badge.el.style.setProperty('--tag', entry.persona.color)
+  vrmRig(model, entry.id)
+    .then(rig => {
+      if (people.get(entry.id) !== entry || entry.model !== model) return rig.dispose()
+      entry.p.setRig(rig)
+    })
+    .catch(err => console.warn(`studio: the model ${model} did not load:`, err))
+}
+
 function leave(entry) {
   if (entry.state === 'leaving') return
   const was = entry.state
+  // a feature may keep them in the room off duty (the lounge): they leave their desk as usual, then stay
+  const kept = !entry.friend && features.keep(entry)
   entry.state = 'leaving'
   chaos.release(entry)
   const { p, seat } = entry
-  const out = [world.doorway.inside, world.doorway.outside]
-  const bye = () => {
-    scene.remove(p.root)
-    p.rig.dispose?.()
-    entry.badge.el.remove()
-    people.delete(entry.id)
-    features.gone(entry)
-  }
+  const out = kept ? [] : [world.doorway.inside, world.doorway.outside]
+  const bye = kept
+    ? () => offDuty(entry)
+    : () => {
+        scene.remove(p.root)
+        p.rig.dispose?.()
+        entry.badge.el.remove()
+        people.delete(entry.id)
+        features.gone(entry)
+      }
   if (was === 'waiting' || !seat) {
     if (waiting.includes(entry)) waiting.splice(waiting.indexOf(entry), 1)
     p.call(() => p.walk([v3(p.root.position.x, aisleZ), ...out]).call(bye))
@@ -608,7 +724,10 @@ function refreshBadge(entry) {
   const shared = sessionCount > 1 && people.get(info.lead)?.info.sessionName
   const leadRole = sessionCount > 1 && info.sessionName ? `Claude · ${info.sessionName}` : persona.role || 'Claude'
   const agentRole = kind === persona.name ? 'agent' : kind
-  setText(badge.role, entry.isLead ? leadRole : shared ? `${agentRole} · ${shared}` : agentRole)
+  setText(badge.role, entry.friend ? (entry.nextUp ? 'next up' : 'off duty') : entry.isLead ? leadRole : shared ? `${agentRole} · ${shared}` : agentRole)
+  // someone off duty shows only their name tag, so the pills in the room are the people really working
+  badge.el.classList.toggle('off', !!entry.friend)
+  badge.el.classList.toggle('next', !!entry.friend && !!entry.nextUp)
   setText(badge.card, entry.open ? persona.about : '')
   badge.pill.style.setProperty('--dot', dot)
   badge.pill.classList.toggle('busy', code !== 'idle' && state !== 'leaving')
@@ -617,7 +736,7 @@ function refreshBadge(entry) {
   setText(badge.detail, words)
   badge.detail.style.display = words ? '' : 'none'
   badge.el.classList.toggle('open', entry.open)
-  p.activity = POSE[code] || 'idle'
+  if (!entry.friend) p.activity = POSE[code] || 'idle' // the lounge poses the people off duty itself
   const mood = MOODS.has(info.mood) ? info.mood : 'calm'
   p.mood = mood === 'celebrate' ? 'calm' : mood
   // a new cheer from the mod (a test passed, a run of errors ended): a fist pump and confetti over the desk
@@ -766,10 +885,13 @@ function apply(state) {
   sessionCount = list.length
   const instant = !synced
   synced = true
-  for (const entry of [...people.values()]) if (!want.has(entry.id)) leave(entry)
+  // (people off duty in the lounge belong to the lounge, not to a session)
+  for (const entry of [...people.values()]) if (!entry.friend && !want.has(entry.id)) leave(entry)
   for (const [id, info] of want) {
     const entry = people.get(id) ?? spawn(id, info, instant)
     entry.info = info
+    // a character picked in the panel can arrive a moment after the agent walked in: dress them in it then
+    if (!entry.isLead && typeof info.model === 'string' && info.model !== entry.model && entry.state !== 'leaving' && knownModel(info.model)) redress(entry, info.model)
   }
   // the clock and the context window come from the session that changed last, the sky from the one where it was set
   // last (/office night), and the five-hour limit (the account's) from whichever session read it highest
@@ -970,6 +1092,10 @@ const features = makeFeatures({
   standUp,
   sitDown,
   focusOn,
+  /** Brings someone off duty into the room ({ model, at, yaw }); see features.js. */
+  addFriend,
+  /** Sends a person out of the door from where they are (for someone off duty). */
+  leave,
   /** Feeds the page a made-up update, as the server would send it (for demo switches). */
   apply: state => apply(state),
 })
@@ -1040,8 +1166,8 @@ else if (DEMO || STILL >= 0) {
 } else connect()
 if (params.has('focus')) {
   // for close-up checks: ?focus=claude&zoom=3 starts looking at one person
-  // (or at a thing: ?focus=rack, ?focus=poster, ?focus=fire for the extinguisher post)
-  const things = { rack: new THREE.Vector3(6.4, 0.6, -6.4), poster: new THREE.Vector3(3.4, 1.6, -6.9), fire: world.extinguisher.spot }
+  // (or at a thing: ?focus=rack, ?focus=poster, ?focus=fire for the extinguisher post, ?focus=tv for the lounge TV)
+  const things = { rack: new THREE.Vector3(6.4, 0.6, -6.4), poster: new THREE.Vector3(3.4, 1.6, -6.9), fire: world.extinguisher.spot, tv: new THREE.Vector3(-5.2, 0.6, 5.2) }
   const thing = things[params.get('focus')]
   if (thing) focusAt(thing, Number(params.get('zoom')) || 3)
   else focusOn(people.get(params.get('focus')) ?? [...people.values()][0], Number(params.get('zoom')) || 3)
@@ -1100,16 +1226,18 @@ function placeBadges(dt) {
 
 let lastHud = ''
 function updateHud() {
-  const here = [...people.values()].filter(e => e.state !== 'leaving')
+  const here = [...people.values()].filter(e => e.state !== 'leaving' && !e.friend)
+  const off = [...people.values()].filter(e => e.friend && e.state === 'off').length
   const team = here.length
   const now = new Date()
   const time = lastClock || `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-  const key = `${team}/${sessionCount}/${time}`
+  const key = `${team}/${off}/${sessionCount}/${time}`
   if (key === lastHud) return
   lastHud = key
   const lead = here.find(e => e.isLead)
   hudTeam.textContent =
-    sessionCount > 1 ? `${sessionCount} Claude sessions · ${team} people` : team === 0 ? 'nobody in yet' : team === 1 ? `just ${lead?.persona.name ?? 'Claude'} today` : `team of ${team}`
+    (sessionCount > 1 ? `${sessionCount} Claude sessions · ${team} people` : team === 0 ? 'nobody in yet' : team === 1 ? `just ${lead?.persona.name ?? 'Claude'} today` : `team of ${team}`) +
+    (off ? ` · ${off} off duty` : '')
   hudClock.textContent = time
 }
 
@@ -1242,6 +1370,7 @@ requestAnimationFrame(frame)
 window.__studio = {
   ready: true,
   people,
+  camera,
   world,
   chaos,
   fx,
@@ -1249,7 +1378,7 @@ window.__studio = {
   models: MODELS,
   apply,
   /** A one-line summary per person, for checks. */
-  rows: () => [...people.values()].map(e => ({ id: e.id, name: e.persona.name, state: e.state, rig: e.p.rig.kind, mood: e.p.mood, action: e.p.action, holding: e.p.holding, x: +e.p.root.position.x.toFixed(2), z: +e.p.root.position.z.toFixed(2), cheer: +e.p.cheer.toFixed(1), say: e.voice.text })),
+  rows: () => [...people.values()].map(e => ({ id: e.id, name: e.persona.name, friend: !!e.friend, model: e.model, activity: e.p.activity, seated: e.p.seated, state: e.state, rig: e.p.rig.kind, mood: e.p.mood, action: e.p.action, holding: e.p.holding, x: +e.p.root.position.x.toFixed(2), z: +e.p.root.position.z.toFixed(2), cheer: +e.p.cheer.toFixed(1), say: e.voice.text })),
 }
 if (params.has('debug')) {
   window.addEventListener('error', e => console.log('STUDIO-ERROR ' + e.message + ' @' + e.filename + ':' + e.lineno))
