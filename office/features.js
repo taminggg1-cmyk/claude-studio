@@ -20,6 +20,20 @@
 //                              person's card); return nothing to let it through.
 //   hover(hit)                 the pointer moved over the room (not dragging); same hit. Return a CSS cursor (e.g.
 //                              'pointer') when something of yours is under it; the first feature that answers wins.
+//   keep(entry)                a person is about to leave (their agent or session ended). Return true to keep them in
+//                              the room off duty: they still walk their way out of their desk (and any `depart` route),
+//                              but then stay, and offDuty(entry) follows. The first feature that answers true wins.
+//   offDuty(entry)             a kept person is now off duty: entry.friend is true, entry.state is 'off', their id is
+//                              a new 'friend:N' one and they have no desk. Plan what they do from here.
+//   hire(entry, from)          someone off duty is starting work (a new agent or lead wears their character): drop any
+//                              plans for them, queue getting up on entry.p, and return the points their walk to the
+//                              desk should start from (like arrive). Their id changes right after.
+//
+// People off duty (entry.friend) belong to the feature that keeps them (the lounge): they have no desk and no session,
+// the server's updates never send them away, and the core does not pose them (set entry.p.activity yourself). The one
+// with entry.nextUp set is the next a new agent wears (else one at random), and their name tag says "next up".
+// ctx.addFriend({ model }) brings a new one into the room (just outside the door, or `at` a spot), ctx.leave(entry)
+// sends one out of the door from where they stand.
 //
 // ctx.env is shared lighting a feature may change: env.sun and env.sky scale the sunlight and the sky light (1 = as the
 // clock says; weather lowers them on a grey day). The panel (the "+ Ask the office" card) is ../panel.js: import
@@ -46,6 +60,16 @@ import { makeDecorate } from './features/decorate.js'
 import { makeInteract } from './features/interact.js'
 import { makeWeather } from './features/weather.js'
 import { makeCharacters } from './features/characters.js'
+import { makeMailroom } from './features/mailroom.js'
+import { makeLounge } from './features/lounge.js'
+import { makeTv } from './features/tv.js'
+import { makeSound } from './features/sound.js'
+import { makeJobs } from './features/jobs.js'
+import { makeStatusStrip } from './features/status-strip.js'
+import { makeStations } from './features/stations.js'
+import { makeGadgets } from './features/gadgets.js'
+import { makeStandup } from './features/standup.js'
+import { makeUsageTag } from './features/usage-tag.js'
 
 const MAKERS = {
   'your-turn': makeYourTurn,
@@ -60,6 +84,16 @@ const MAKERS = {
   interact: makeInteract,
   weather: makeWeather,
   characters: makeCharacters,
+  mailroom: makeMailroom,
+  lounge: makeLounge,
+  tv: makeTv,
+  sound: makeSound,
+  jobs: makeJobs,
+  'status-strip': makeStatusStrip,
+  stations: makeStations,
+  gadgets: makeGadgets,
+  standup: makeStandup,
+  'usage-tag': makeUsageTag,
 }
 
 export function makeFeatures(ctx) {
@@ -101,6 +135,13 @@ export function makeFeatures(ctx) {
     arrive: chain('arrive'),
     depart: chain('depart'),
     label: chain('label'),
+    hire: chain('hire'),
+    offDuty: each('offDuty'),
+    /** True when a feature keeps a leaving person in the room, off duty. */
+    keep(entry) {
+      for (const f of list) if (run(f, 'keep', [entry]) === true) return true
+      return false
+    },
     /** True when a feature took the click. */
     click(hit) {
       for (const f of list) if (run(f, 'click', [hit]) === true) return true

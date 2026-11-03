@@ -131,7 +131,7 @@ if ($window -eq [IntPtr]::Zero) {
     Start-Process $Url
     exit 0
   }
-  Start-Process -FilePath $Browser -ArgumentList "--app=$Url"
+  Start-Process -FilePath $Browser -ArgumentList "--app=$Url", "--autoplay-policy=no-user-gesture-required"
   # wait for the new window: it takes the page's title once the page has loaded
   $deadline = (Get-Date).AddSeconds(25)
   while ($window -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline) {

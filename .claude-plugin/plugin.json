@@ -1,6 +1,6 @@
 {
   "name": "pixel-office",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "Claude's studio: one cosy isometric office window shared by every Claude Code session. Each session's Claude walks in and takes a desk pod, and every agent she summons walks in, sits with her and shows what it is doing.",
   "license": "MIT",
   "author": { "name": "taminggg1-cmyk" },

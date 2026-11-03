@@ -135,6 +135,31 @@
         content: '★ ';
         color: #ffe9a8;
       }
+      /* someone off duty in the lounge: only the name tag, with "off duty" always showing, a little softer */
+      .badge.off .pill {
+        padding-right: 4px;
+        gap: 0;
+        opacity: 0.86;
+      }
+      .badge.off .pill .dot,
+      .badge.off .pill .label,
+      .badge.off .detail {
+        display: none;
+      }
+      .badge.off .tag .role {
+        display: inline;
+        font-style: italic;
+      }
+      /* the one picked to go to work next: a gold ring and a star */
+      .badge.off.next .pill {
+        opacity: 1;
+        box-shadow: 0 0 0 2px #f2c14e, var(--shadow);
+      }
+      .badge.off.next .tag .role::before {
+        content: '★ ';
+        color: #ffe9a8;
+        font-style: normal;
+      }
       /* the speech bubble: a line from the persona, for a few seconds */
       .bubble {
         position: relative;
@@ -181,7 +206,8 @@
         }
       }
       /* the persona card: who this is, shown when you click them */
-      .card {
+      /* (only the cards over people's heads: other cards, such as the Bug Catcher game's, are not hidden) */
+      .badge .card {
         display: none;
         max-width: 240px;
         padding: 7px 11px;

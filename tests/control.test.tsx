@@ -81,6 +81,8 @@ test('a prompt and an agent asked for in the window reach this session', async (
   // the new agent walks in wearing the character picked for it in the window
   const helper = w.states.filter(Boolean).pop()?.helpers?.find((h: { id: string }) => h.id === 'new-agent')
   expect(helper?.model).toBe("akari.vrm")
+  // and the studio tells the window this mod can do that (a session on an older mod gets a warning in the panel)
+  expect(w.states.filter(Boolean).pop()?.can).toContain('pick-character')
   // each command runs once, not again at the next poll
   await clock.advance(4000)
   expect(w.prompts.length).toBe(1)

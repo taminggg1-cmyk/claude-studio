@@ -1,7 +1,8 @@
 // The interact feature: things to click and do in the room (see ../features.js for the hooks).
 //
 //   the cat          click to pet it: it wakes, stretches, purrs (hearts), and sometimes trots to another cosy spot.
-//                    It runs off when a desk catches fire.
+//                    It runs off when a desk catches fire. When Claude has worked alone at the big desk for about two
+//                    minutes (no agents), it hops up and naps on her desk to keep her company (?catnap: after 8 s).
 //   the coffee machine  click to brew; then the cursor carries a cup. Click a person to hand it over: they say thanks
 //                    and a stressed person looks calm for a minute. Escape or a click on the floor drops the cup.
 //   the plants       click to water; each plant grows new shoots (up to a cap) and slowly shrinks back over days.
@@ -177,6 +178,20 @@ export function makeInteract(ctx) {
     { name: 'sill', pos: new THREE.Vector3(7.6, 0.8, z0 + 0.1), ry: 0, up: new THREE.Vector3(7.6, 0.02, z0 + 1.1) },
     { name: 'desk', pos: new THREE.Vector3(lastSeat?.desk.x ?? 4.4, 0.03, lastSeat?.desk.z ?? 4.2), ry: 1.2 },
   ]
+  // the big desk (seat 0, the first Claude's): on the desk top, at the end away from the other row, beside the laptop
+  const bigSeat = seats[0]
+  const CLAUDE_DESK = bigSeat ? SPOTS.length : -1
+  if (bigSeat) {
+    const away = Math.sign(bigSeat.z - (bigSeat.pod?.z ?? bigSeat.z)) || -1
+    SPOTS.push({
+      name: 'claude-desk',
+      pos: new THREE.Vector3(bigSeat.desk.x, 0.62, bigSeat.z + away * 0.4),
+      ry: Math.PI / 2,
+      up: new THREE.Vector3(bigSeat.desk.x, 0.02, bigSeat.z + away * 0.95),
+    })
+  }
+  const CAT_NAP_S = params.has('catnap') ? 8 : 120
+  let aloneFor = 0
   const cs = { mode: 'sleep', t: 0, spot: 0, segs: [], seg: null, speed: 0.9, nextWander: 90 + Math.random() * 150, bob: 0, ryGoal: cat?.rotation.y ?? 0 }
   const fires = () => {
     try {
@@ -263,8 +278,26 @@ export function makeInteract(ctx) {
     d = Math.atan2(Math.sin(d), Math.cos(d))
     return a + d * k
   }
+  /** Claude alone at the big desk for a while (no agents working): the cat comes over and naps on her desk. */
+  function catCompany(dt) {
+    if (CLAUDE_DESK < 0) return
+    let lead = null
+    let working = false
+    for (const e of people.values()) {
+      if (e.isLead && e.seat === bigSeat) lead = e
+      else if (!e.isLead && !e.friend && e.state !== 'leaving') working = true
+    }
+    const atDesk = !!lead && lead.state === 'working' && lead.p.seated && !lead.away
+    aloneFor = atDesk && !working ? aloneFor + dt : 0
+    if (aloneFor > CAT_NAP_S && cs.mode === 'sleep' && cs.spot !== CLAUDE_DESK && !cs.fleeing && !fires().length) {
+      cs.nextWander = 150 + Math.random() * 150
+      planTrot(CLAUDE_DESK, 0.9)
+    }
+  }
+
   function stepCat(dt) {
     if (!cat) return
+    catCompany(dt)
     const onFire = fires()
     if (onFire.length && !cs.fleeing && cs.mode !== 'flee-wait') {
       const target = fleeSpot(onFire[0])
@@ -411,7 +444,7 @@ export function makeInteract(ctx) {
     const now = Date.now()
     if (now - (pokeAt.get(entry.id) ?? 0) < 4000) return
     pokeAt.set(entry.id, now)
-    if (entry.state === 'working' || entry.state === 'waiting' || entry.state === 'returning') {
+    if (entry.state === 'working' || entry.state === 'waiting' || entry.state === 'returning' || entry.state === 'off') {
       if (!p.action) {
         const seated = p.seated
         const prev = seated ? p.activity : null

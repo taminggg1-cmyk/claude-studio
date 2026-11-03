@@ -12,10 +12,13 @@ let agents = 0
 let tests = 0
 let errors = 0
 let fires = 0
+let commits = 0
+let pushes = 0
+let prs = 0
 
 export const shiftReport: Feature = {
   name: 'shift-report',
-  extras: () => ({ started: Math.max(started, 0), files: files.size, edits, agents, tests, errors, fires }),
+  extras: () => ({ started: Math.max(started, 0), files: files.size, edits, agents, tests, errors, fires, commits, pushes, prs }),
 }
 
 export function installShiftReport(on: On): void {
@@ -39,4 +42,7 @@ export function signalShiftReport($: EngineInterface, signal: Signal, data: Sign
   else if (signal === 'test-passed') tests++
   else if (signal === 'error') errors++
   else if (signal === 'fire-out') fires++
+  else if (signal === 'commit' && !data.commit?.amend) commits++
+  else if (signal === 'push' && data.push?.refs.length) pushes++
+  else if (signal === 'pull-request') prs++
 }

@@ -88,8 +88,13 @@ export function makeActor(id, rig) {
     rig,
     props,
     seated: false,
-    /** What the hands do: idle, type, read, think, wave. */
+    /** What the hands do: idle, type, read, think, wave, nap (seated, eyes shut), watch (seated, head turned to `lookAt`). */
     activity: 'idle',
+    /** Where a person watching (activity 'watch') looks: a point in the room (the TV's screen), or null. */
+    lookAt: null,
+    /** Seconds of laughing left, and of a gasp (surprised face, hand to the mouth): reactions to what is on TV. */
+    laugh: 0,
+    gasp: 0,
     /** How they feel: calm, flow, thinking, stressed, panic. */
     mood: 'calm',
     /** A standing job that overrides the pose: 'panic' (running with hands on the head) or 'spray' (extinguisher). */
@@ -112,6 +117,15 @@ export function makeActor(id, rig) {
     speed: 1.45,
     seat: null,
 
+    /** Gives the person a new id (someone off duty in the lounge starting work as an agent, or back again). */
+    setId(next) {
+      id = next
+      this.id = next
+      root.userData.personId = next
+      root.traverse(o => {
+        if (o.isMesh) o.userData.personId = next
+      })
+    },
     /** Puts a new body in (the character model once it has loaded). */
     setRig(next) {
       root.remove(this.rig.object)
@@ -183,6 +197,8 @@ export function makeActor(id, rig) {
       dy = Math.atan2(Math.sin(dy), Math.cos(dy))
       root.rotation.y += dy * (1 - Math.exp(-dt * 9))
       if (this.cheer > 0) this.cheer -= dt
+      if (this.laugh > 0) this.laugh -= dt
+      if (this.gasp > 0) this.gasp -= dt
       const bob = this.pose(T, t + this.seed, dt)
       const f = 1 - Math.exp(-dt * (this.walking ? 16 : 7))
       for (const key of JOINTS) J[key] += (T[key] - J[key]) * f
@@ -190,9 +206,9 @@ export function makeActor(id, rig) {
       // the face, for bodies that have one to change
       const m = this.cheer > 0 ? 'celebrate' : this.action === 'panic' ? 'panic' : this.mood
       const want = {
-        happy: m === 'celebrate' ? 1 : m === 'flow' ? 0.35 : 0,
+        happy: m === 'celebrate' ? 1 : this.laugh > 0 ? 0.9 : m === 'flow' ? 0.35 : 0,
         sad: m === 'stressed' ? 0.75 : 0,
-        surprised: m === 'panic' ? 0.9 : 0,
+        surprised: m === 'panic' ? 0.9 : this.gasp > 0 ? 0.7 : 0,
         relaxed: m === 'calm' && !this.walking ? 0.25 : 0,
         angry: this.action === 'spray' ? 0.35 : 0,
         aa: 0,
@@ -208,7 +224,8 @@ export function makeActor(id, rig) {
         this.nextBlink = 2.5 + Math.random() * 4
       }
       this.blink -= dt
-      const closed = this.blink > 0 ? 1 : m === 'celebrate' ? 0.15 : 0
+      const napping = this.seated && this.activity === 'nap' && this.cheer <= 0 && this.talking <= 0
+      const closed = this.blink > 0 || napping ? 1 : m === 'celebrate' ? 0.15 : 0
 
       props.cup.visible = (this.sip > 0 && this.seated) || (this.holding === 'cup' && !this.seated)
       props.pen.visible = this.seated && (this.activity === 'think' || this.mood === 'thinking') && this.cheer <= 0 && this.mood !== 'stressed'
@@ -487,6 +504,47 @@ export function makeActor(id, rig) {
           T.hY = 0.4
           T.hX = -0.05
         }
+      } else if (a === 'watch') {
+        // watching TV: leaning back, hands in the lap, head (and a little of the body) turned to the screen
+        T.lean = -0.15
+        T.aAx = T.aBx = -0.3
+        T.eA = T.eB = 0.7
+        T.aAz = -0.1
+        T.aBz = 0.1
+        T.hX = 0.02 + Math.sin(k * 0.23) * 0.03
+        if (this.lookAt) {
+          let d = Math.atan2(this.lookAt.x - root.position.x, this.lookAt.z - root.position.z) - root.rotation.y
+          d = Math.max(-1.1, Math.min(1.1, Math.atan2(Math.sin(d), Math.cos(d))))
+          T.twist = d * 0.25
+          T.hY = d * 0.75 + Math.sin(k * 0.17) * 0.05
+        }
+        if (this.laugh > 0) {
+          // laughing: shoulders shaking, head tipped back, a hand on the tummy
+          const shake = Math.sin(k * 15)
+          T.lean = -0.24 + shake * 0.035
+          T.hX = -0.16
+          T.aAx = -0.55
+          T.eA = 1.55
+          T.aAz = -0.28
+          bob = Math.abs(shake) * 0.01
+        } else if (this.gasp > 0) {
+          // a gasp: sitting up, a hand to the mouth
+          T.lean = 0.06
+          T.aBx = -0.5
+          T.eB = 2.25
+          T.aBz = 0.32
+          T.hX = 0.04
+        }
+      } else if (a === 'nap' && this.talking <= 0) {
+        // dozing on the sofa: leaning back, head dropped to one side, hands in the lap, slow breaths
+        T.lean = -0.2
+        T.aAx = T.aBx = -0.3
+        T.eA = T.eB = 0.7
+        T.aAz = -0.1
+        T.aBz = 0.1
+        T.hZ = 0.3
+        T.hX = 0.2 + Math.sin(k * 0.8) * 0.03
+        bob = Math.sin(k * 0.8) * 0.004
       } else {
         // resting: lean back, hands in the lap, looking around the room
         T.lean = -0.13
@@ -500,7 +558,7 @@ export function makeActor(id, rig) {
 
       // a sip of coffee now and then, when nothing is on fire
       this.nextSip -= dt
-      const calm = !cheering && mood !== 'stressed' && mood !== 'panic' && a !== 'wave'
+      const calm = !cheering && mood !== 'stressed' && mood !== 'panic' && a !== 'wave' && a !== 'nap' && this.laugh <= 0 && this.gasp <= 0
       if (this.nextSip <= 0 && this.sip <= 0 && calm) {
         this.sip = 2.6
         this.nextSip = 9 + Math.random() * 14

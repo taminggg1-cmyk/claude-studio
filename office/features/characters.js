@@ -38,6 +38,7 @@ const SAMPLE = {
       licence: 'redistribution prohibited: no violent use, no sexual use, personal, non-profit use only, no redistribution',
       warning: 'The licence limits how this model may be used (no violent use, no sexual use, personal, non-profit use only, no redistribution). Use it only in ways it allows.',
       hasPersona: true,
+      lounge: true,
       writing: false,
       note: '',
     },
@@ -51,6 +52,7 @@ const SAMPLE = {
       licence: 'VRM 1.0 licence: no limits stated',
       warning: '',
       hasPersona: false,
+      lounge: false,
       writing: true,
       note: '',
     },
@@ -352,6 +354,34 @@ export function makeCharacters(ctx) {
     return h('div', { class: 'chr-size' }, h('span', { class: 'chr-small' }, 'Size'), bar, pct, reset)
   }
 
+  /**
+   * Whether this agent hangs out in the lounge while it is not working. The room follows at once (no reload): they
+   * walk in, or walk out of the door.
+   */
+  function loungeRow(c) {
+    const set = async on => {
+      if (!canSend) return say(cannotSendWhy)
+      try {
+        await ask('/characters/lounge', { file: c.file, on })
+        say(on ? `${c.name} will hang out in the lounge.` : `${c.name} will only come in to work.`)
+        if (demo) {
+          c.lounge = on
+          signature = ''
+          render()
+        }
+      } catch (err) {
+        say(`Not done: ${err.message || err}`)
+      }
+    }
+    return h(
+      'div',
+      { class: 'chr-roles', title: 'People off duty sit in the lounge. When Claude starts an agent, one of them gets up and comes to work.' },
+      h('span', { class: 'chr-small' }, 'Lounge'),
+      h('button', { type: 'button', class: `btn plain${c.lounge ? ' on' : ''}`, disabled: !canSend || !!c.lounge, onclick: () => set(true) }, 'Hang out'),
+      h('button', { type: 'button', class: `btn plain${c.lounge ? '' : ' on'}`, disabled: !canSend || !c.lounge, onclick: () => set(false) }, 'Only for work'),
+    )
+  }
+
   function card(c) {
     const removeBtn = h('button', { type: 'button', class: 'btn plain', disabled: !canSend }, 'Remove')
     let sure = false
@@ -381,6 +411,8 @@ export function makeCharacters(ctx) {
           ),
         ),
       ),
+      // (an office server started before the lounge existed sends no `lounge` field and has no route to save it)
+      c.role === 'agent' && typeof c.lounge === 'boolean' ? loungeRow(c) : null,
       h('p', { class: 'chr-small' }, c.credit || 'No credit line.'),
       h('p', { class: 'chr-small' }, `Licence: ${c.licence}`),
       c.warning ? h('p', { class: 'chr-warn' }, c.warning) : null,

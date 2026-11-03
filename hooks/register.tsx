@@ -23,8 +23,13 @@ import { FEATURES } from './features'
 import { characterFor, installControl, runControlCommand, signalControl } from './features/control'
 import type { Command } from './features/control'
 import type { OfficePath, Signal, SignalData } from './features/kit'
+import { gitMomentsOf } from './features/git'
+import { installMailroom, signalMailroom } from './features/mailroom'
+import { installJobs, signalJobs } from './features/jobs'
+import { installStations, signalStations } from './features/stations'
+import { installGadgets, signalGadgets } from './features/gadgets'
 import { installPaperwork, signalPaperwork } from './features/paperwork'
-import { installProgress, signalProgress, takeProgressStats } from './features/progress'
+import { installProgress, setProgressTimezone, signalProgress, takeProgressStats } from './features/progress'
 import { installShiftReport, signalShiftReport } from './features/shift-report'
 import { installWhiteboard, signalWhiteboard } from './features/whiteboard'
 import { installYourTurn, signalYourTurn } from './features/your-turn'
@@ -130,6 +135,12 @@ const EMPTY: StudioInfo = {
   sky: 'auto',
 }
 const info = atom({ plugin: 'pixel-office', key: 'info' } as const, EMPTY, { shape: 'info-4' })
+
+/**
+ * What this mod can do for the window, sent with every studio. A session keeps the mod it loaded until /reload-plugins,
+ * so a window newer than a session's mod reads this to warn that the session cannot do something yet.
+ */
+const CAN = ['pick-character']
 
 /** A shell command that runs tests or a type check, so the badge can say "Testing". */
 const TEST_COMMAND =
@@ -338,6 +349,7 @@ async function publish($: EngineInterface): Promise<void> {
     usage,
     sky,
     extras: featureExtras(),
+    can: CAN,
   }
   const key = JSON.stringify(next)
   if (key === published) return
@@ -424,6 +436,7 @@ async function findTimezone($: EngineInterface): Promise<void> {
     const minutes = isWin ? Number.parseInt(out, 10) : zone ? (zone[1] === '-' ? -1 : 1) * (Number(zone[2]) * 60 + Number(zone[3])) : Number.NaN
     if (ran.exitCode === 0 && Number.isFinite(minutes)) {
       tzMinutes = minutes
+      setProgressTimezone(minutes)
       await publish($)
     }
   } catch {
@@ -586,7 +599,7 @@ async function openWindow($: EngineInterface, launch: boolean): Promise<string |
     return ran.exitCode === 0 ? null : ran.stderr.trim().split('\n')[0] || 'the browser did not start'
   }
   if ((await platformOf($)) === 'mac') {
-    for (const argv of [['open', '-na', 'Google Chrome', '--args', `--app=${url}`], ['open', url]]) {
+    for (const argv of [['open', '-na', 'Google Chrome', '--args', `--app=${url}`, '--autoplay-policy=no-user-gesture-required'], ['open', url]]) {
       const ran = await $.process.run(argv, { timeoutMs: 15000 }).catch(() => undefined)
       if (ran?.exitCode === 0) return null
     }
@@ -611,7 +624,7 @@ const LINUX_WINDOW = [
   '  if command -v wmctrl >/dev/null 2>&1 && wmctrl -a "$title" 2>/dev/null; then exit 0; fi',
   'fi',
   'for b in google-chrome google-chrome-stable chromium chromium-browser microsoft-edge microsoft-edge-stable brave-browser vivaldi; do',
-  '  if command -v "$b" >/dev/null 2>&1; then bg "$b" --new-window --app="$url"; exit 0; fi',
+  '  if command -v "$b" >/dev/null 2>&1; then bg "$b" --new-window --autoplay-policy=no-user-gesture-required --app="$url"; exit 0; fi',
   'done',
   'if command -v xdg-open >/dev/null 2>&1; then bg xdg-open "$url"; exit 0; fi',
   'echo "no browser found (install Chrome, Chromium, Edge or Brave)" >&2; exit 1',
@@ -685,6 +698,18 @@ function emit($: EngineInterface, signal: Signal, data: SignalData): void {
   } catch {}
   try {
     signalControl($, signal, data)
+  } catch {}
+  try {
+    signalMailroom($, signal, data)
+  } catch {}
+  try {
+    signalJobs($, signal, data)
+  } catch {}
+  try {
+    signalStations($, signal, data)
+  } catch {}
+  try {
+    signalGadgets($, signal, data)
   } catch {}
 }
 
@@ -857,6 +882,16 @@ export const register: Register = on => {
       if (outcome === 'test-passed') emit($, 'test-passed', { who })
       const file = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : ''
       if (outcome && outcome !== 'error' && /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(String(e.tool)) && file) emit($, 'edit', { who, tool: String(e.tool), file })
+      // git work, read from what the command printed: a letter per commit, a trip to the postbox per push (mailroom)
+      let git = null
+      try {
+        git = gitMomentsOf(String(e.tool), input, result)
+      } catch {}
+      if (git) {
+        for (const commit of git.commits) emit($, 'commit', { who, commit, dirs: git.dirs, toolUseId: id })
+        if (git.push) emit($, 'push', { who, push: git.push, dirs: git.dirs, toolUseId: id })
+        if (git.pr) emit($, 'pull-request', { who, pr: git.pr, dirs: git.dirs, toolUseId: id })
+      }
       void publish($).catch(() => undefined)
     }
   }).catch(($, e, next) => next(e)) // the studio only watches: whatever goes wrong here, the tool call goes on
@@ -868,6 +903,10 @@ export const register: Register = on => {
   installPaperwork(on)
   installShiftReport(on)
   installControl(on)
+  installMailroom(on)
+  installJobs(on)
+  installStations(on)
+  installGadgets(on)
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const data = await read($, info)

@@ -1,7 +1,8 @@
 // The shift-report feature (see ../features.js for the hooks a feature may answer). When a session ends and its lead
 // walks out, a small card at the bottom left says how the shift went: how long it ran, files changed, agents hired,
-// tests passed, fires put out (and errors, if there were any). The numbers come from the mod (hooks/features/
-// shift-report.ts) as extras['shift-report'] of each session.
+// tests passed, fires put out, commits made (and pushes, pull requests, commits not pushed yet and errors, when there
+// were any). The numbers come from the mod (hooks/features/shift-report.ts) as extras['shift-report'] of each
+// session; the commits still waiting come from the mailroom's extras.
 //
 // Demo: `?sessions=2&shift` makes up numbers for the demo sessions, and `?shift=now` shows a sample card at once.
 
@@ -116,7 +117,7 @@ export function makeShiftReport(ctx) {
     return li
   }
 
-  /** Puts up one card. `shift` is { folder, name, color, ms, files, agents, tests, fires, errors }. */
+  /** Puts up one card. `shift` is { folder, name, color, ms, files, agents, tests, fires, errors, commits, pushes, prs, unpushed }. */
   const show = shift => {
     const card = document.createElement('div')
     card.className = 'shift-card'
@@ -132,6 +133,10 @@ export function makeShiftReport(ctx) {
     who.append(sub)
     const list = document.createElement('ul')
     list.append(line('Shift ran', shiftLength(shift.ms)), line('Files changed', String(shift.files)), line('Agents hired', String(shift.agents)), line('Tests passed', String(shift.tests)), line('Fires put out', String(shift.fires)))
+    list.append(line('Commits made', String(num(shift.commits))))
+    if (shift.pushes) list.append(line('Pushes', String(shift.pushes)))
+    if (shift.prs) list.append(line('Pull requests', String(shift.prs)))
+    if (shift.unpushed) list.append(line('Commits not pushed', String(shift.unpushed), 'bad'))
     if (shift.errors) list.append(line('Errors', String(shift.errors), 'bad'))
     card.append(head, who, list)
     let timer = 0
@@ -158,6 +163,9 @@ export function makeShiftReport(ctx) {
       tests: 3 + k + Math.floor(secs / 8),
       errors: k % 2 ? 0 : 2,
       fires: k % 2 ? 1 : 0,
+      commits: 3 + k * 2 + Math.floor(secs / 12),
+      pushes: 1 + (k % 2),
+      prs: k % 2,
     }
   }
 
@@ -165,7 +173,7 @@ export function makeShiftReport(ctx) {
     apply(snapshot, sessions) {
       if (wanted && ctx.params.get('shift') === 'now' && !sampled) {
         sampled = true
-        show({ folder: 'pixel-office', name: 'Claude', color: '#c8775a', ms: (2 * 3600 + 14 * 60) * 1000, files: 7, agents: 3, tests: 5, fires: 1, errors: 2 })
+        show({ folder: 'pixel-office', name: 'Claude', color: '#c8775a', ms: (2 * 3600 + 14 * 60) * 1000, files: 7, agents: 3, tests: 5, fires: 1, errors: 2, commits: 6, pushes: 2, prs: 1, unpushed: 1 })
       }
       const here = new Set()
       sessions.forEach((s, k) => {
@@ -182,13 +190,16 @@ export function makeShiftReport(ctx) {
         const real = s.state?.extras?.['shift-report']
         const x = wanted && ctx.isDemo && !real ? fake(s, k) : real
         if (x) entry.extras = x
+        // the commits still waiting to be pushed (the mailroom's count)
+        const mail = s.state?.extras?.mailroom
+        entry.unpushed = wanted && ctx.isDemo && !mail ? (k % 2 ? 0 : 2) : num(mail?.waiting)
       })
       for (const [id, e] of [...seen]) {
         if (here.has(id)) continue
         seen.delete(id)
         const x = e.extras ?? {}
         const started = Number.isFinite(x.started) && x.started > 0 ? x.started : e.firstSeen
-        show({ folder: e.folder, name: e.name, color: e.color, ms: Date.now() - started, files: num(x.files), agents: num(x.agents), tests: num(x.tests), fires: num(x.fires), errors: num(x.errors) })
+        show({ folder: e.folder, name: e.name, color: e.color, ms: Date.now() - started, files: num(x.files), agents: num(x.agents), tests: num(x.tests), fires: num(x.fires), errors: num(x.errors), commits: num(x.commits), pushes: num(x.pushes), prs: num(x.prs), unpushed: num(e.unpushed) })
       }
     },
   }
